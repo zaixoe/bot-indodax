@@ -27,9 +27,17 @@ def start_web_server_thread():
   web_thread.start()
 # ==============================================================================
 
-# --- PENGATURAN WAJIB (Membaca dari Secrets) ---
-TOKEN_BOT = os.environ['BOT_TOKEN']
-PRIMARY_USER_CHAT_ID = os.environ['CHAT_ID'] 
+try:
+    import config
+    TOKEN_BOT = config.BOT_TOKEN
+    PRIMARY_USER_CHAT_ID = config.CHAT_ID
+except ImportError:
+    # Berhenti jika file config.py tidak ditemukan
+    print("="*50)
+    print("KESALAHAN: File 'config.py' tidak ditemukan.")
+    print("Silakan buat file config.py dan isi dengan token Anda.")
+    print("="*50)
+    exit()
 
 # --- PENGATURAN STRATEGI & ANALISIS ---
 SIGNAL_INTERVAL_MENIT = 15
