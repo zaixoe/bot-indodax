@@ -18,7 +18,7 @@ import matplotlib.pyplot as plt
 from fpdf import FPDF
 
 # --- [1] KONFIGURASI HALAMAN & GAYA ---
-st.set_page_config(layout="wide", page_title="Apex Quantum Analytics", page_icon="🤖")
+st.set_page_config(layout="wide", page_title="Apex Trading Analytics", page_icon="🤖")
 hide_streamlit_style = """<style>#MainMenu {visibility: hidden;} footer {visibility: hidden;} header {visibility: hidden;}</style>"""
 st.markdown(hide_streamlit_style, unsafe_allow_html=True)
 
