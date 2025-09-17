@@ -13,12 +13,10 @@ import numpy as np
 import plotly.express as px
 import plotly.graph_objects as go
 from datetime import datetime
-import calmap
-import matplotlib.pyplot as plt
 from fpdf import FPDF
 
 # --- [1] KONFIGURASI HALAMAN & GAYA ---
-st.set_page_config(layout="wide", page_title="Apex Trading Analytics", page_icon="🤖")
+st.set_page_config(layout="wide", page_title="Apex Quantum Analytics", page_icon="🤖")
 hide_streamlit_style = """<style>#MainMenu {visibility: hidden;} footer {visibility: hidden;} header {visibility: hidden;}</style>"""
 st.markdown(hide_streamlit_style, unsafe_allow_html=True)
 
@@ -187,16 +185,54 @@ else:
 st.markdown("---")
 st.header("Visualisasi Performa")
 
-# --- Heatmap Kalender ---
+# --- Heatmap Kalender (Versi Plotly) ---
+st.subheader("🗓️ Heatmap Kalender P/L Harian")
 if not filtered_df.empty and 'exit_timestamp' in filtered_df.columns and not filtered_df['exit_timestamp'].isnull().all():
     closed_trades_cal = filtered_df[filtered_df['status'] == 'closed'].dropna(subset=['exit_timestamp', 'pnl_percent'])
     if not closed_trades_cal.empty:
-        daily_pnl = closed_trades_cal.set_index('exit_timestamp')['pnl_percent'].resample('D').sum()
-        try:
-            fig, ax = calmap.calendarplot(daily_pnl, monthticks=3, daylabels='MTWTFSS', cmap='viridis', fillcolor='lightgrey', linewidth=0.5, fig_kws=dict(figsize=(12, 5)))
-            st.pyplot(fig)
-        except Exception as e:
-            st.caption(f"Tidak dapat membuat heatmap: {e}")
+        # 1. Siapkan data untuk heatmap
+        daily_pnl = closed_trades_cal.set_index('exit_timestamp')['pnl_percent'].resample('D').sum().fillna(0)
+        
+        # Buat kalender penuh untuk setahun terakhir untuk tampilan yang konsisten
+        start_date = daily_pnl.index.min()
+        end_date = datetime.now()
+        all_days = pd.date_range(start=start_date, end=end_date, freq='D')
+        
+        # Gabungkan data P/L dengan kalender penuh
+        daily_pnl = daily_pnl.reindex(all_days, fill_value=0)
+        
+        # Ekstrak komponen tanggal yang dibutuhkan oleh Plotly
+        dates = daily_pnl.index
+        weekdays = dates.dayofweek
+        weeks = dates.isocalendar().week
+        
+        # Buat teks hover
+        hover_text = [f"{date.strftime('%Y-%m-%d')}<br>P/L: {pnl:.2f}%" for date, pnl in daily_pnl.items()]
+        
+        # 2. Buat objek heatmap Plotly
+        fig = go.Figure(data=go.Heatmap(
+            z=daily_pnl.values,
+            x=weeks,
+            y=weekdays,
+            text=hover_text,
+            hoverinfo='text',
+            colorscale='Viridis', # Skala warna yang sama dengan calmap
+            showscale=False # Sembunyikan legenda warna
+        ))
+
+        # 3. Atur tata letak agar terlihat seperti kalender
+        fig.update_layout(
+            yaxis=dict(
+                tickmode='array',
+                tickvals=[0, 1, 2, 3, 4, 5, 6],
+                ticktext=['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun']
+            ),
+            xaxis_title="Minggu dalam Setahun",
+            yaxis_title="",
+            title_text="Heatmap Performa Harian",
+            height=300
+        )
+        st.plotly_chart(fig, use_container_width=True)
     else:
         st.info("Menunggu data transaksi yang ditutup untuk menampilkan heatmap.")
 else:
