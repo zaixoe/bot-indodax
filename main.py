@@ -1,272 +1,276 @@
-# Import library standar
-import logging
-import asyncio
+# ==============================================================================
+#           APEX QUANTUM ANALYTICS TERMINAL (AQAT) - v1.2
+# ==============================================================================
+# SEBUAH DASHBOARD STREAMLIT UNTUK ANALISIS PERFORMA TRADING BOT TINGKAT LANJUT
+# FITUR: Live Signal Analysis, What-If Simulation, Quantitative Metrics,
+#        Calendar Heatmap, Drawdown Visualization, PDF Reports.
+# ==============================================================================
+
+import streamlit as st
 import requests
-import os
-from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
+import pandas as pd
+import numpy as np
+import plotly.express as px
+import plotly.graph_objects as go
 from datetime import datetime
-from replit import db
+from fpdf import FPDF
 
-# Import library eksternal
-from telegram.ext import Application, CommandHandler
-from telegram.error import TelegramError
-from flask import Flask
-from threading import Thread
+# --- [1] KONFIGURASI HALAMAN & GAYA ---
+st.set_page_config(layout="wide", page_title="Apex Quantum Analytics", page_icon="🤖")
+hide_streamlit_style = """<style>#MainMenu {visibility: hidden;} footer {visibility: hidden;} header {visibility: hidden;}</style>"""
+st.markdown(hide_streamlit_style, unsafe_allow_html=True)
 
-# ==============================================================================
-# BAGIAN KODE UNTUK SERVER WEB "KEEP-ALIVE" (AGAR GRATIS 24/7)
-# ==============================================================================
-app = Flask('')
-@app.route('/')
-def home():
-    return "Bot is alive and running."
-def run_web_server():
-  app.run(host='0.0.0.0', port=8080)
-def start_web_server_thread():
-  web_thread = Thread(target=run_web_server)
-  web_thread.start()
-# ==============================================================================
+# --- [2] KONFIGURASI KONEKSI API ---
+BASE_URL = st.secrets.get("BASE_URL", "http://127.0.0.1:5000/api/v1/dashboard")
+API_KEY = st.secrets.get("DASHBOARD_API_KEY", "your-fallback-key")
+HEADERS = {"X-API-Key": API_KEY}
 
-try:
-    import config
-    TOKEN_BOT = config.BOT_TOKEN
-    PRIMARY_USER_CHAT_ID = config.CHAT_ID
-except ImportError:
-    # Berhenti jika file config.py tidak ditemukan
-    print("="*50)
-    print("KESALAHAN: File 'config.py' tidak ditemukan.")
-    print("Silakan buat file config.py dan isi dengan token Anda.")
-    print("="*50)
-    exit()
+# --- [3] FUNGSI-FUNGSI PENGOLAHAN DATA & ANALITIK ---
 
-# --- PENGATURAN STRATEGI & ANALISIS ---
-SIGNAL_INTERVAL_MENIT = 15
-VERY_LOW_PROXIMITY = 1.0
-LOW_PROXIMITY = 2.5
-STRONG_MOMENTUM_CHANGE = 0.75
-WEAK_MOMENTUM_CHANGE = 0.1
-BUY_SCORE_THRESHOLD = 3
-SELL_SCORE_THRESHOLD = -3
-STOP_LOSS_PERCENT = 5
-TAKE_PROFIT_PERCENT = 10
-
-# --- Konfigurasi Logging ---
-logging.basicConfig(format='%(asctime)s - %(name)s - %(levelname)s - %(message)s', level=logging.INFO)
-logger = logging.getLogger(__name__)
-
-# --- Variabel Global ---
-monitoring_active = False
-monitor_task = None
-coin_states = {}
-
-async def send_telegram_message(context, chat_id, message):
+@st.cache_data(ttl=30)
+def get_data(endpoint):
+    """Fungsi generik untuk mengambil data dari backend API."""
     try:
-        await context.bot.send_message(chat_id=chat_id, text=message, parse_mode='HTML')
-    except TelegramError as e:
-        logger.error(f"Gagal mengirim pesan ke {chat_id}: {e}")
-
-def get_full_market_summary():
-    url = "https://indodax.com/api/summaries"
-    headers = {'User-Agent': 'Mozilla/5.0'}
-    try:
-        response = requests.get(url, headers=headers, timeout=15)
+        response = requests.get(f"{BASE_URL}/{endpoint}", headers=HEADERS, timeout=20)
         response.raise_for_status()
-        return response.json()
-    except Exception as e:
-        logger.error(f"Koneksi ke API Indodax gagal: {e}")
-        return None
+        data = response.json()
+        if not data: return pd.DataFrame()
+        
+        df = pd.DataFrame(data)
+        if 'timestamp' in df.columns:
+            df['timestamp'] = pd.to_datetime(df['timestamp'], errors='coerce')
+        if 'entry_timestamp' in df.columns:
+            df['entry_timestamp'] = pd.to_datetime(df['entry_timestamp'], errors='coerce').dt.tz_localize(None)
+        if 'exit_timestamp' in df.columns:
+            df['exit_timestamp'] = pd.to_datetime(df['exit_timestamp'], errors='coerce').dt.tz_localize(None)
+        return df
+    except requests.exceptions.RequestException as e:
+        st.sidebar.error(f"Koneksi API Gagal: {e}")
+        return pd.DataFrame()
 
-def get_user_timezone(user_id):
-    user_id_str = str(user_id)
-    return db.get(user_id_str, "UTC")
+@st.cache_data
+def calculate_advanced_metrics(_df):
+    """Menghitung metrik statistik kuantitatif dari DataFrame trade."""
+    if _df.empty or 'status' not in _df.columns or 'pnl_percent' not in _df.columns:
+        return {"total_pnl_percent": 0, "total_trades": 0, "win_rate_percent": 0, "profit_factor": 0,
+                "sharpe_ratio": 0, "max_drawdown_percent": 0, "expectancy_percent": 0,
+                "winning_trades": 0, "losing_trades": 0}
 
-def get_top_10_status_message(user_id):
-    full_summary = get_full_market_summary()
-    if not full_summary: return "<i>Gagal mengambil data pasar dari Indodax saat ini.</i>"
-    try:
-        tickers = full_summary.get('tickers', {})
-        idr_pairs = {k: v for k, v in tickers.items() if k.endswith('_idr')}
-        if not idr_pairs: return "<i>Tidak ada pasangan koin IDR yang ditemukan.</i>"
-        sorted_pairs = sorted(idr_pairs.items(), key=lambda item: float(item[1]['vol_idr']), reverse=True)
+    df = _df[_df['status'] == 'closed'].dropna(subset=['pnl_percent'])
+    if df.empty:
+        return {"total_pnl_percent": 0, "total_trades": 0, "win_rate_percent": 0, "profit_factor": 0,
+                "sharpe_ratio": 0, "max_drawdown_percent": 0, "expectancy_percent": 0,
+                "winning_trades": 0, "losing_trades": 0}
 
-        message_lines = [f"📊 <b>Harga 10 Koin Teratas</b> (Volume 24 Jam)"]
-        message_lines.append("----------------------------------")
-        for pair_name, pair_data in sorted_pairs[:10]:
-            last_price = float(pair_data.get('last', 0))
-            message_lines.append(f"🔸 <b>{pair_name.replace('_idr', '').upper()}</b>: Rp {last_price:,.0f}")
+    total_trades = len(df); pnl = df['pnl_percent']
+    wins = pnl[pnl > 0]; losses = pnl[pnl <= 0]
+    win_rate = (len(wins) / total_trades * 100) if total_trades > 0 else 0
+    total_profit = wins.sum(); total_loss = abs(losses.sum())
+    profit_factor = total_profit / total_loss if total_loss > 0 else float('inf')
+    avg_return = pnl.mean(); std_return = pnl.std()
+    sharpe_ratio = (avg_return / std_return) * np.sqrt(365) if std_return > 0 else 0
+    
+    df_sorted = df.sort_values(by='exit_timestamp'); cumulative_pnl = df_sorted['pnl_percent'].cumsum()
+    running_max = cumulative_pnl.cummax(); drawdown = running_max - cumulative_pnl
+    max_drawdown = drawdown.max() if not drawdown.empty else 0
+    
+    avg_win = wins.mean() if not wins.empty else 0
+    avg_loss = abs(losses.mean()) if not losses.empty else 0
+    expectancy = ((win_rate / 100) * avg_win) - ((1 - win_rate / 100) * avg_loss)
+    
+    return {"total_pnl_percent": total_profit - total_loss, "total_trades": total_trades,
+            "winning_trades": len(wins), "losing_trades": len(losses), "win_rate_percent": win_rate,
+            "profit_factor": profit_factor, "sharpe_ratio": sharpe_ratio,
+            "max_drawdown_percent": max_drawdown, "expectancy_percent": expectancy}
+            
+@st.cache_data
+def generate_pdf_report(_df, _metrics, date_range):
+    pdf = FPDF(); pdf.add_page(); pdf.set_font("Arial", 'B', 16)
+    pdf.cell(0, 10, "Apex Trading Bot - Performance Report", 0, 1, 'C')
+    pdf.set_font("Arial", '', 10)
+    pdf.cell(0, 10, f"Periode: {date_range[0].strftime('%Y-%m-%d')} hingga {date_range[1].strftime('%Y-%m-%d')}", 0, 1, 'C')
+    pdf.ln(5); pdf.set_font("Arial", 'B', 12); pdf.cell(0, 10, "Key Performance Indicators", 0, 1)
+    pdf.set_font("Arial", '', 10)
+    metrics_to_show = {"Total Net P/L (%)": f"{_metrics['total_pnl_percent']:.2f}%", "Win Rate (%)": f"{_metrics['win_rate_percent']:.2f}%",
+                       "Profit Factor": f"{_metrics['profit_factor']:.2f}", "Sharpe Ratio (Annualized)": f"{_metrics['sharpe_ratio']:.2f}",
+                       "Maximum Drawdown (%)": f"{_metrics['max_drawdown_percent']:.2f}%", "Total Trades": str(_metrics['total_trades'])}
+    for key, value in metrics_to_show.items():
+        pdf.cell(95, 7, f"  {key}:", 'B', 0); pdf.cell(95, 7, value, 'B', 1, 'R')
+    pdf.ln(5); pdf.set_font("Arial", 'B', 12); pdf.cell(0, 10, "Top 5 & Bottom 5 Trades", 0, 1)
+    pdf.set_font("Arial", 'B', 8)
+    pdf.cell(40, 6, 'Pair', 1, 0, 'C'); pdf.cell(40, 6, 'Strategy', 1, 0, 'C');
+    pdf.cell(40, 6, 'Entry Date', 1, 0, 'C'); pdf.cell(30, 6, 'P/L (%)', 1, 1, 'C')
+    pdf.set_font("Arial", '', 8)
+    closed_trades = _df[_df['status'] == 'closed'].sort_values('pnl_percent', ascending=False).dropna(subset=['entry_timestamp', 'pnl_percent'])
+    for _, row in pd.concat([closed_trades.head(5), closed_trades.tail(5)]).iterrows():
+        pdf.cell(40, 5, str(row['pair']), 1); pdf.cell(40, 5, str(row['strategy_type']), 1)
+        pdf.cell(40, 5, row['entry_timestamp'].strftime('%Y-%m-%d'), 1); pdf.cell(30, 5, f"{row['pnl_percent']:.2f}%", 1, 1, 'R')
+    pdf.ln(5); pdf.set_font("Arial", 'I', 8)
+    pdf.cell(0, 10, "This report is generated for analytical purposes and does not constitute investment advice.", 0, 1, 'C')
+    return pdf.output(dest='S').encode('latin-1')
 
-        user_tz_str = get_user_timezone(user_id)
-        user_tz = ZoneInfo(user_tz_str)
-        first_coin_data = sorted_pairs[0][1]
-        server_timestamp = int(first_coin_data.get('server_time', 0))
-        naive_utc_time = datetime.fromtimestamp(server_timestamp)
-        aware_utc_time = naive_utc_time.replace(tzinfo=ZoneInfo("UTC"))
-        local_time = aware_utc_time.astimezone(user_tz)
-        message_lines.append(f"\n<i>Update pada: {local_time.strftime('%Y-%m-%d %H:%M:%S')} ({user_tz_str})</i>")
-        return "\n".join(message_lines)
-    except Exception as e:
-        logger.error(f"Gagal memformat pesan status: {e}")
-        return "<i>Terjadi error saat memproses data pasar.</i>"
 
-def calculate_signal_score(pair_data, previous_price):
-    last_price = float(pair_data.get('last', 0))
-    high_24h = float(pair_data.get('high', 0))
-    low_24h = float(pair_data.get('low', 0))
-    value_score = 0
-    if last_price <= low_24h * (1 + VERY_LOW_PROXIMITY / 100): value_score = 2
-    elif last_price <= low_24h * (1 + LOW_PROXIMITY / 100): value_score = 1
-    elif last_price >= high_24h * (1 - VERY_LOW_PROXIMITY / 100): value_score = -2
-    elif last_price >= high_24h * (1 - LOW_PROXIMITY / 100): value_score = -1
-    momentum_score = 0
-    if previous_price > 0:
-        price_change_percent = ((last_price - previous_price) / previous_price) * 100
-        if price_change_percent >= STRONG_MOMENTUM_CHANGE: momentum_score = 2
-        elif price_change_percent >= WEAK_MOMENTUM_CHANGE: momentum_score = 1
-        elif price_change_percent <= -STRONG_MOMENTUM_CHANGE: momentum_score = -2
-        elif price_change_percent <= -WEAK_MOMENTUM_CHANGE: momentum_score = -1
-    return value_score + momentum_score, value_score, momentum_score
+# --- [4] TAMPILAN UTAMA DASHBOARD ---
+st.title("Apex Trading Analytics Terminal")
 
-async def market_analysis_loop(context):
-    global coin_states
-    while monitoring_active:
-        logger.info("Memulai siklus analisis pasar kuantitatif...")
-        signal_found_in_cycle = False
-        full_summary = get_full_market_summary()
-        if not full_summary or 'tickers' not in full_summary:
-            await asyncio.sleep(SIGNAL_INTERVAL_MENIT * 60)
-            continue
+signals_df = get_data("signals")
+master_df = get_data("trades")
 
-        tickers = full_summary.get('tickers', {})
-        idr_pairs = {k: v for k, v in tickers.items() if k.endswith('_idr')}
-        sorted_pairs = sorted(idr_pairs.items(), key=lambda item: float(item[1]['vol_idr']), reverse=True)
-        top_10_pairs = [pair[0] for pair in sorted_pairs[:10]]
+# --- Live Signal Radar & Analysis ---
+st.header("📡 Live Signal Radar")
+if not signals_df.empty:
+    cols = st.columns([3, 2])
+    with cols[0]:
+        st.dataframe(signals_df.sort_values(by='timestamp', ascending=False), use_container_width=True)
+    with cols[1]:
+        signal_data = signals_df.iloc[0]
+        st.subheader(f"Analisis Sinyal Terbaru: `{signal_data['pair'].upper()}`")
+        kpi_cols = st.columns(2)
+        kpi_cols[0].metric("Strategi", signal_data['strategy'].upper())
+        kpi_cols[1].metric("ADX (M15)", f"{signal_data['adx']:.2f}")
+        kpi_cols[0].metric("Harga vs SMA 200 (H4)", f"{signal_data.get('price_vs_sma_h4_percent', 0):.2f}%")
+        status_color = "🟢 Aktif" if signal_data.get('golden_cross_m15_active', False) else "🔴 Tidak Aktif"
+        kpi_cols[1].markdown(f"**Golden Cross (M15):** {status_color}")
+else:
+    st.info("Saat ini tidak ada sinyal trading aktif yang terdeteksi. Bot sedang memantau pasar...")
+st.markdown("---")
 
-        for pair_name in top_10_pairs:
-            try:
-                pair_data = tickers.get(pair_name)
-                last_price = float(pair_data.get('last', 0))
-                if pair_name not in coin_states:
-                    coin_states[pair_name] = {'previous_price': last_price, 'last_signal_score': 0}
-                    continue
-                previous_price = coin_states[pair_name]['previous_price']
-                last_signal_score = coin_states[pair_name]['last_signal_score']
-                total_score, value_score, momentum_score = calculate_signal_score(pair_data, previous_price)
+# --- Expander untuk Filter & Simulasi ---
+with st.expander("⚙️ Filter Analisis & Opsi Laporan", expanded=True):
+    if not master_df.empty:
+        # Fitur #4: Simulasi "What-If" (Placeholder)
+        st.markdown("**Simulasi 'What-If' pada Data Historis:**")
+        sim_min_adx = st.slider("Filter Trade Berdasarkan ADX Saat Masuk ≥", 20, 60, 25)
+        st.caption("Info: Fitur simulasi memerlukan data 'ADX saat masuk' untuk disimpan pada setiap trade.")
+        
+        # Filter standar
+        col1, col2, col3 = st.columns(3)
+        with col1:
+            date_range = st.date_input("Pilih Rentang Waktu", value=(master_df['entry_timestamp'].min().date(), datetime.now().date()))
+        with col2:
+            selected_pairs = st.multiselect("Pilih Aset", sorted(master_df['pair'].unique()), default=sorted(master_df['pair'].unique()))
+        with col3:
+            selected_strategies = st.multiselect("Pilih Strategi", sorted(master_df['strategy_type'].unique()), default=sorted(master_df['strategy_type'].unique()))
 
-                if total_score >= BUY_SCORE_THRESHOLD and last_signal_score < BUY_SCORE_THRESHOLD:
-                    signal_found_in_cycle = True
-                    coin_states[pair_name]['last_signal_score'] = total_score
-                    stop_loss_price = last_price * (1 - STOP_LOSS_PERCENT / 100)
-                    take_profit_price = last_price * (1 + TAKE_PROFIT_PERCENT / 100)
-                    buy_message = (
-                        f"🔥 <b>SINYAL BELI KUAT: {pair_name.upper()}</b> 🔥\n\n"
-                        f"<b>Skor Analisis: {total_score}</b> (Nilai: {value_score}, Momentum: {momentum_score})\n"
-                        f"<b>Harga:</b> Rp {last_price:,.0f}\n\n"
-                        f"💡 <b><u>Saran Trading</u></b> 💡\n"
-                        f"<b>Stop-Loss:</b> ~Rp {stop_loss_price:,.0f}\n"
-                        f"<b>Take-Profit:</b> ~Rp {take_profit_price:,.0f}"
-                    )
-                    await send_telegram_message(context, PRIMARY_USER_CHAT_ID, buy_message)
-
-                elif total_score <= SELL_SCORE_THRESHOLD and last_signal_score > SELL_SCORE_THRESHOLD:
-                    signal_found_in_cycle = True
-                    coin_states[pair_name]['last_signal_score'] = total_score
-                    sell_message = (
-                        f"❄️ <b>SINYAL JUAL KUAT: {pair_name.upper()}</b> ❄️\n\n"
-                        f"<b>Skor Analisis: {total_score}</b> (Nilai: {value_score}, Momentum: {momentum_score})\n"
-                        f"<b>Harga:</b> Rp {last_price:,.0f}"
-                    )
-                    await send_telegram_message(context, PRIMARY_USER_CHAT_ID, sell_message)
-
-                elif SELL_SCORE_THRESHOLD < total_score < BUY_SCORE_THRESHOLD:
-                     coin_states[pair_name]['last_signal_score'] = 0
-
-                coin_states[pair_name]['previous_price'] = last_price
-
-            except Exception as e:
-                logger.error(f"Gagal menganalisis koin {pair_name}: {e}")
-                continue
-
-        if not signal_found_in_cycle:
-            user_tz_str = get_user_timezone(PRIMARY_USER_CHAT_ID)
-            user_tz = ZoneInfo(user_tz_str)
-            now_local = datetime.now(user_tz)
-            heartbeat_message = f"✅ <i>Analisis pasar selesai pukul {now_local.strftime('%H:%M:%S')} ({user_tz_str}). Tidak ada sinyal kuat. Memindai kembali dalam {SIGNAL_INTERVAL_MENIT} menit.</i>"
-            await send_telegram_message(context, PRIMARY_USER_CHAT_ID, heartbeat_message)
-            logger.info("Siklus selesai, tidak ada sinyal. Pesan Heartbeat terkirim.")
-
-        await asyncio.sleep(SIGNAL_INTERVAL_MENIT * 60)
-
-async def start_command(update, context):
-    await update.message.reply_text(
-        "👋 <b>Bot Analisis Kuantitatif Aktif!</b>\n\n"
-        "Gunakan /set_timezone untuk mengatur zona waktu Anda (contoh: <code>/set_timezone Asia/Jakarta</code>).\n\n"
-        "Perintah yang tersedia:\n"
-        "▶️ /monitor - Memulai pemantauan sinyal.\n"
-        "📊 /harga_10_koin_teratas - Melihat harga Top 10.\n"
-        "⏹️ /stop - Menghentikan pemantauan.",
-        parse_mode='HTML'
-    )
-
-async def monitor_command(update, context):
-    global monitoring_active, monitor_task
-    if not monitoring_active:
-        monitoring_active = True
-        await update.message.reply_text("✅ <b>Analisis kuantitatif dimulai!</b> Saya akan memindai pasar setiap 15 menit.", parse_mode='HTML')
-        monitor_task = asyncio.create_task(market_analysis_loop(context))
+        start_date = datetime.combine(date_range[0], datetime.min.time())
+        end_date = datetime.combine(date_range[1], datetime.max.time())
+        filtered_df = master_df[(master_df['entry_timestamp'] >= start_date) & (master_df['entry_timestamp'] <= end_date) &
+                                (master_df['pair'].isin(selected_pairs)) & (master_df['strategy_type'].isin(selected_strategies))].copy()
     else:
-        await update.message.reply_text("ℹ️ Pemantauan sudah aktif.", parse_mode='HTML')
+        st.info("Filter dan simulasi akan aktif setelah ada data transaksi.")
+        filtered_df = pd.DataFrame()
 
-async def harga_10_koin_teratas_command(update, context):
-    user_id = update.effective_user.id
-    await update.message.reply_text("<i>Mengambil data harga terkini...</i>", parse_mode='HTML')
-    status_message = get_top_10_status_message(user_id)
-    await send_telegram_message(context, user_id, status_message)
+# --- Tampilan Utama (setelah expander) ---
+st.header("Key Performance Indicators (KPIs)")
+if not filtered_df.empty:
+    metrics = calculate_advanced_metrics(filtered_df)
+    cols = st.columns(4)
+    cols[0].metric("Total Net P/L (%)", f"{metrics['total_pnl_percent']:.2f}%")
+    cols[1].metric("Win Rate", f"{metrics['win_rate_percent']:.1f}%")
+    cols[2].metric("Profit Factor", f"{metrics['profit_factor']:.2f}")
+    cols[3].metric("Sharpe Ratio (Ann.)", f"{metrics['sharpe_ratio']:.2f}")
+    cols = st.columns(4)
+    cols[0].metric("Maximum Drawdown (%)", f"{metrics['max_drawdown_percent']:.2f}%")
+    cols[1].metric("Expectancy per Trade (%)", f"{metrics['expectancy_percent']:.2f}%")
+    cols[2].metric("Total Trades", metrics['total_trades'])
+    cols[3].metric("Menang / Kalah", f"{metrics['winning_trades']} / {metrics['losing_trades']}")
 
-async def set_timezone_command(update, context):
-    user_id = str(update.effective_user.id)
-    if not context.args:
-        await update.message.reply_text(
-            "Gunakan format: <code>/set_timezone [Nama_Zona_Waktu]</code>\n\n"
-            "Contoh:\n"
-            "• <code>/set_timezone Asia/Jakarta</code> (WIB)\n"
-            "Zona waktu Anda saat ini: <b>{}</b>".format(db.get(user_id, "UTC")),
-            parse_mode='HTML'
+    if 'date_range' in locals():
+        pdf_data = generate_pdf_report(filtered_df, metrics, date_range)
+        st.sidebar.download_button(label="📄 Unduh Laporan PDF", data=pdf_data,
+                                   file_name=f"apex_report_{datetime.now().strftime('%Y%m%d')}.pdf", mime="application/pdf")
+else:
+    st.info("Metrik akan ditampilkan di sini setelah ada data yang cocok dengan filter.")
+
+st.markdown("---")
+st.header("Visualisasi Performa")
+
+# --- Heatmap Kalender (Versi Plotly) ---
+st.subheader("🗓️ Heatmap Kalender P/L Harian")
+if not filtered_df.empty and 'exit_timestamp' in filtered_df.columns and not filtered_df['exit_timestamp'].isnull().all():
+    closed_trades_cal = filtered_df[filtered_df['status'] == 'closed'].dropna(subset=['exit_timestamp', 'pnl_percent'])
+    if not closed_trades_cal.empty:
+        # 1. Siapkan data untuk heatmap
+        daily_pnl = closed_trades_cal.set_index('exit_timestamp')['pnl_percent'].resample('D').sum().fillna(0)
+        
+        # Buat kalender penuh untuk setahun terakhir untuk tampilan yang konsisten
+        start_date = daily_pnl.index.min()
+        end_date = datetime.now()
+        all_days = pd.date_range(start=start_date, end=end_date, freq='D')
+        
+        # Gabungkan data P/L dengan kalender penuh
+        daily_pnl = daily_pnl.reindex(all_days, fill_value=0)
+        
+        # Ekstrak komponen tanggal yang dibutuhkan oleh Plotly
+        dates = daily_pnl.index
+        weekdays = dates.dayofweek
+        weeks = dates.isocalendar().week
+        
+        # Buat teks hover
+        hover_text = [f"{date.strftime('%Y-%m-%d')}<br>P/L: {pnl:.2f}%" for date, pnl in daily_pnl.items()]
+        
+        # 2. Buat objek heatmap Plotly
+        fig = go.Figure(data=go.Heatmap(
+            z=daily_pnl.values,
+            x=weeks,
+            y=weekdays,
+            text=hover_text,
+            hoverinfo='text',
+            colorscale='Viridis', # Skala warna yang sama dengan calmap
+            showscale=False # Sembunyikan legenda warna
+        ))
+
+        # 3. Atur tata letak agar terlihat seperti kalender
+        fig.update_layout(
+            yaxis=dict(
+                tickmode='array',
+                tickvals=[0, 1, 2, 3, 4, 5, 6],
+                ticktext=['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun']
+            ),
+            xaxis_title="Minggu dalam Setahun",
+            yaxis_title="",
+            title_text="Heatmap Performa Harian",
+            height=300
         )
-        return
-    try:
-        timezone_str = context.args[0]
-        ZoneInfo(timezone_str)
-        db[user_id] = timezone_str
-        await update.message.reply_text(f"✅ Timezone Anda telah diatur ke: <b>{timezone_str}</b>", parse_mode='HTML')
-    except ZoneInfoNotFoundError:
-        await update.message.reply_text("❌ Zona waktu tidak valid. Gunakan format standar seperti 'Asia/Jakarta'.", parse_mode='HTML')
-
-async def stop_command(update, context):
-    global monitoring_active, monitor_task
-    if monitoring_active:
-        monitoring_active = False
-        if monitor_task: monitor_task.cancel()
-        monitor_task = None
-        coin_states.clear()
-        await update.message.reply_text("⏹️ <b>Analisis kuantitatif dihentikan.</b> State telah direset.", parse_mode='HTML')
+        st.plotly_chart(fig, use_container_width=True)
     else:
-        await update.message.reply_text("ℹ️ Pemantauan tidak aktif.", parse_mode='HTML')
+        st.info("Menunggu data transaksi yang ditutup untuk menampilkan heatmap.")
+else:
+    st.info("Tidak ada data untuk menampilkan heatmap.")
 
-def main():
-    print(">>> MEMULAI BOT ANALISIS KUANTITATIF (PRODUCTION-GRADE) <<<")
+# --- Tabs ---
+tab1, tab2, tab3 = st.tabs(["📈 Kurva Ekuitas", "📊 Analisis per Aset", "📜 Detail Transaksi"])
+with tab1:
+    if not filtered_df.empty and 'status' in filtered_df.columns:
+        equity_df = filtered_df[filtered_df['status'] == 'closed'].copy()
+        if not equity_df.empty:
+            equity_df.sort_values(by='exit_timestamp', inplace=True)
+            equity_df['cumulative_pnl'] = equity_df['pnl_percent'].cumsum()
+            equity_df['running_max'] = equity_df['cumulative_pnl'].cummax()
+            fig = go.Figure()
+            fig.add_trace(go.Scatter(x=equity_df['exit_timestamp'], y=equity_df['running_max'], fill=None, mode='lines', line_color='rgba(255,255,255,0)'))
+            fig.add_trace(go.Scatter(x=equity_df['exit_timestamp'], y=equity_df['cumulative_pnl'], fill='tonexty', mode='lines', line_color='cyan', name='Equity Curve'))
+            fig.update_layout(title_text='Kurva Pertumbuhan Ekuitas dengan Periode Drawdown (Area Abu-abu)', xaxis_title='Tanggal', yaxis_title='Total P/L Kumulatif (%)', showlegend=False)
+            st.plotly_chart(fig, use_container_width=True)
+        else:
+            st.info("Menunggu data transaksi yang ditutup untuk menampilkan Kurva Ekuitas.")
+    else:
+        st.info("Tidak ada data yang cocok dengan filter untuk menampilkan Kurva Ekuitas.")
 
-    # Memulai server web "keep-alive" di thread terpisah
-    start_web_server_thread()
-
-    application = Application.builder().token(TOKEN_BOT).build()
-
-    application.add_handler(CommandHandler("start", start_command))
-    application.add_handler(CommandHandler("monitor", monitor_command))
-    application.add_handler(CommandHandler("stop", stop_command))
-    application.add_handler(CommandHandler("harga_10_koin_teratas", harga_10_koin_teratas_command))
-    application.add_handler(CommandHandler("set_timezone", set_timezone_command))
-
-    application.run_polling()
-
-if __name__ == "__main__":
-    main()
+with tab2:
+    if not filtered_df.empty and 'status' in filtered_df.columns:
+        pnl_by_pair_df = filtered_df[filtered_df['status'] == 'closed'].copy()
+        if not pnl_by_pair_df.empty:
+            pnl_by_pair = pnl_by_pair_df.groupby('pair')['pnl_percent'].sum().sort_values(ascending=False)
+            fig_pair_pnl = px.bar(pnl_by_pair, title="Total P/L (%) per Aset")
+            st.plotly_chart(fig_pair_pnl, use_container_width=True)
+        else:
+            st.info("Menunggu data transaksi yang ditutup untuk menampilkan Analisis per Aset.")
+    else:
+        st.info("Tidak ada data yang cocok dengan filter untuk menampilkan Analisis per Aset.")
+        
+with tab3:
+    if not filtered_df.empty:
+        st.dataframe(filtered_df, use_container_width=True)
+    else:
+        st.info("Tidak ada data yang cocok dengan filter untuk menampilkan Detail Transaksi.")
