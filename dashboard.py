@@ -188,61 +188,60 @@ if not signals_df.empty:
     st.dataframe(signals_df, use_container_width=True)
 else:
     st.info("Saat ini tidak ada sinyal trading aktif yang terdeteksi. Bot sedang memantau pasar...")
-
 st.markdown("---")
 
-# --- [PERBAIKAN UTAMA] Filter dipindahkan ke Expander ---
+# --- Expander untuk Filter ---
 with st.expander("⚙️ Filter Analisis & Opsi Laporan", expanded=True):
     if not master_df.empty:
-        # Buat kolom untuk tata letak filter yang lebih rapi
         col1, col2, col3 = st.columns(3)
-        
         with col1:
-            date_range = st.date_input(
-                "Pilih Rentang Waktu", value=(master_df['entry_timestamp'].min().date(), datetime.now().date()),
-                min_value=master_df['entry_timestamp'].min().date(), max_value=datetime.now().date(),
-            )
-        
+            date_range = st.date_input("Pilih Rentang Waktu", value=(master_df['entry_timestamp'].min().date(), datetime.now().date()))
         with col2:
             selected_pairs = st.multiselect("Pilih Aset", sorted(master_df['pair'].unique()), default=sorted(master_df['pair'].unique()))
-        
         with col3:
             selected_strategies = st.multiselect("Pilih Strategi", sorted(master_df['strategy_type'].unique()), default=sorted(master_df['strategy_type'].unique()))
 
-        # Terapkan filter
         start_date = datetime.combine(date_range[0], datetime.min.time())
         end_date = datetime.combine(date_range[1], datetime.max.time())
         filtered_df = master_df[(master_df['entry_timestamp'] >= start_date) & (master_df['entry_timestamp'] <= end_date) &
                                 (master_df['pair'].isin(selected_pairs)) & (master_df['strategy_type'].isin(selected_strategies))].copy()
     else:
         st.info("Filter akan aktif setelah ada data transaksi.")
-        filtered_df = pd.DataFrame()
+        filtered_df = pd.DataFrame() # Buat DataFrame kosong jika tidak ada master data
 
-# Tampilkan metrik dan visualisasi di bawah expander
+# --- [PERBAIKAN KUNCI] Logika Tampilan KPI di luar filter ---
 st.header("Key Performance Indicators (KPIs)")
-if not filtered_df.empty:
-    metrics = calculate_advanced_metrics(filtered_df)
-    # Tampilan Metrik (seperti sebelumnya)
-    cols = st.columns(4)
-    cols = st.columns(4)
-    cols[0].metric("Total Net P/L (%)", f"{metrics['total_pnl_percent']:.2f}%")
-    cols[1].metric("Win Rate", f"{metrics['win_rate_percent']:.1f}%")
-    cols[2].metric("Profit Factor", f"{metrics['profit_factor']:.2f}")
-    cols[3].metric("Sharpe Ratio (Ann.)", f"{metrics['sharpe_ratio']:.2f}")
-    cols = st.columns(4)
-    cols[0].metric("Maximum Drawdown (%)", f"{metrics['max_drawdown_percent']:.2f}%")
-    cols[1].metric("Expectancy per Trade (%)", f"{metrics['expectancy_percent']:.2f}%")
-    cols[2].metric("Total Trades", metrics['total_trades'])
-    cols[3].metric("Menang / Kalah", f"{metrics['winning_trades']} / {metrics['losing_trades']}")
-    # Tombol Download PDF di dalam Expander untuk kerapian
-    with st.expander("Opsi Laporan"):
+
+# Selalu hitung metrik. Fungsi ini sudah dirancang untuk menangani DataFrame kosong.
+metrics = calculate_advanced_metrics(filtered_df)
+
+# Selalu tampilkan metrik. Mereka akan menampilkan 0 jika tidak ada data.
+cols = st.columns(4)
+cols[0].metric("Total Net P/L (%)", f"{metrics['total_pnl_percent']:.2f}%")
+cols[1].metric("Win Rate", f"{metrics['win_rate_percent']:.1f}%")
+cols[2].metric("Profit Factor", f"{metrics['profit_factor']:.2f}")
+cols[3].metric("Sharpe Ratio (Ann.)", f"{metrics['sharpe_ratio']:.2f}")
+cols = st.columns(4)
+cols[0].metric("Maximum Drawdown (%)", f"{metrics['max_drawdown_percent']:.2f}%")
+cols[1].metric("Expectancy per Trade (%)", f"{metrics['expectancy_percent']:.2f}%")
+cols[2].metric("Total Trades", metrics['total_trades'])
+cols[3].metric("Menang / Kalah", f"{metrics['winning_trades']} / {metrics['losing_trades']}")
+
+# Tampilkan pesan jika filter tidak menghasilkan data, TAPI setelah menampilkan KPI
+if not master_df.empty and filtered_df.empty:
+    st.warning("Tidak ada data yang cocok dengan filter yang Anda pilih.")
+
+# Tombol Download PDF (di dalam expander untuk kerapian)
+with st.expander("Opsi Laporan"):
+    if not filtered_df.empty:
         pdf_data = generate_pdf_report(filtered_df, metrics, date_range)
         st.download_button(label="📄 Unduh Laporan PDF", data=pdf_data,
                            file_name=f"apex_report_{datetime.now().strftime('%Y%m%d')}.pdf", mime="application/pdf")
-else:
-    st.info("Metrik akan ditampilkan di sini setelah ada data yang cocok dengan filter.")
-
+    else:
+        st.info("Tombol unduh akan aktif setelah ada data transaksi.")
 st.markdown("---")
+
+# --- Visualisasi Performa ---
 st.header("Visualisasi Performa")
 tab1, tab2, tab3 = st.tabs(["📈 Kurva Ekuitas", "📊 Analisis per Aset", "📜 Detail Transaksi"])
 
