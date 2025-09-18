@@ -48,32 +48,46 @@ def get_data(endpoint):
         st.sidebar.error(f"Koneksi API Gagal: {e}")
         return pd.DataFrame()
 
+# GANTI FUNGSI INI DI dashboard.py
+
 @st.cache_data
 def calculate_advanced_metrics(_df):
     """Menghitung metrik statistik kuantitatif dari DataFrame trade."""
+    
+    # Penjaga gerbang utama untuk fungsi ini
     if _df.empty or 'status' not in _df.columns or 'pnl_percent' not in _df.columns:
         return {"total_pnl_percent": 0, "total_trades": 0, "win_rate_percent": 0, "profit_factor": 0,
                 "sharpe_ratio": 0, "max_drawdown_percent": 0, "expectancy_percent": 0,
                 "winning_trades": 0, "losing_trades": 0}
 
     df = _df[_df['status'] == 'closed'].dropna(subset=['pnl_percent'])
-    if df.empty:
-        return {"total_pnl_percent": 0, "total_trades": 0, "win_rate_percent": 0, "profit_factor": 0,
-                "sharpe_ratio": 0, "max_drawdown_percent": 0, "expectancy_percent": 0,
-                "winning_trades": 0, "losing_trades": 0}
+    
+    # Penjaga kedua yang lebih lengkap untuk kasus 0 atau 1 trade
+    if df.empty or len(df) < 2:
+        total_pnl = df['pnl_percent'].sum() if not df.empty else 0
+        winning_trades_count = len(df[df['pnl_percent'] > 0])
+        return {
+            "total_pnl_percent": total_pnl,
+            "total_trades": len(df),
+            "winning_trades": winning_trades_count,
+            "losing_trades": len(df) - winning_trades_count,
+            "win_rate_percent": 100 if len(df) > 0 and winning_trades_count == len(df) else 0,
+            "profit_factor": float('inf') if total_pnl > 0 else 0,
+            "sharpe_ratio": 0, "max_drawdown_percent": 0,
+            "expectancy_percent": df['pnl_percent'].mean() if not df.empty else 0
+        }
 
+    # Kalkulasi penuh jika ada cukup data
     total_trades = len(df); pnl = df['pnl_percent']
     wins = pnl[pnl > 0]; losses = pnl[pnl <= 0]
-    win_rate = (len(wins) / total_trades * 100) if total_trades > 0 else 0
+    win_rate = (len(wins) / total_trades * 100)
     total_profit = wins.sum(); total_loss = abs(losses.sum())
     profit_factor = total_profit / total_loss if total_loss > 0 else float('inf')
     avg_return = pnl.mean(); std_return = pnl.std()
     sharpe_ratio = (avg_return / std_return) * np.sqrt(365) if std_return > 0 else 0
-    
     df_sorted = df.sort_values(by='exit_timestamp'); cumulative_pnl = df_sorted['pnl_percent'].cumsum()
     running_max = cumulative_pnl.cummax(); drawdown = running_max - cumulative_pnl
     max_drawdown = drawdown.max() if not drawdown.empty else 0
-    
     avg_win = wins.mean() if not wins.empty else 0
     avg_loss = abs(losses.mean()) if not losses.empty else 0
     expectancy = ((win_rate / 100) * avg_win) - ((1 - win_rate / 100) * avg_loss)
