@@ -1,8 +1,8 @@
 # ==============================================================================
-#           APEX QUANTUM ANALYTICS TERMINAL (AQAT) - v1.6 (Definitive Edition)
+#           APEX QUANTUM ANALYTICS TERMINAL (AQAT) - v1.7 (UI/UX Refined)
 # ==============================================================================
 # SEBUAH DASHBOARD STREAMLIT UNTUK ANALISIS PERFORMA TRADING BOT TINGKAT LANJUT
-# VERSI INI MENERAPKAN PEMBERSIHAN DATA YANG KONSISTEN DI SEMUA BAGIAN
+# VERSI INI MEMINDAHKAN TOMBOL UNDUH PDF KE HALAMAN UTAMA UNTUK INTUITIVITAS
 # ==============================================================================
 
 import streamlit as st
@@ -181,7 +181,6 @@ st.title("Apex Trading Analytics Terminal")
 signals_df = get_live_signals("signals") 
 master_df = st.cache_data(get_trades_data, ttl=60)("trades")
 
-# ... (Blok Live Signal Radar tetap sama) ...
 st.header("📡 Live Signal Radar")
 if not signals_df.empty:
     cols = st.columns([3, 2])
@@ -200,7 +199,6 @@ else:
     st.info("Saat ini tidak ada sinyal trading aktif yang terdeteksi. Bot sedang memantau pasar...")
 st.markdown("---")
 
-# ... (Blok Expander & Filter tetap sama) ...
 with st.expander("⚙️ Filter Analisis & Opsi Laporan", expanded=True):
     if not master_df.empty and 'entry_timestamp' in master_df.columns:
         min_date = master_df['entry_timestamp'].min().date()
@@ -231,7 +229,6 @@ with st.expander("⚙️ Filter Analisis & Opsi Laporan", expanded=True):
         st.info("Filter akan aktif setelah ada data transaksi.")
         filtered_df = pd.DataFrame()
 
-# ... (Blok KPI tetap sama) ...
 st.header("Key Performance Indicators (KPIs)")
 if not filtered_df.empty:
     metrics = calculate_advanced_metrics(filtered_df)
@@ -247,20 +244,26 @@ if not filtered_df.empty:
     cols_b[2].metric("Total Trades", metrics['total_trades'])
     cols_b[3].metric("Menang / Kalah", f"{metrics['winning_trades']} / {metrics['losing_trades']}")
 
+    # --- [PERUBAHAN LOKASI TOMBOL UNDUH] ---
     if 'date_range' in locals() and len(date_range) == 2:
         pdf_data = generate_pdf_report(filtered_df, metrics, date_range)
-        st.sidebar.download_button(label="📄 Unduh Laporan PDF", data=pdf_data,
-                                   file_name=f"apex_report_{datetime.now().strftime('%Y%m%d')}.pdf", mime="application/pdf")
+        # Tombol sekarang ada di sini, di bawah KPI, bukan di sidebar.
+        st.download_button(
+            label="📄 Unduh Laporan PDF",
+            data=pdf_data,
+            file_name=f"apex_report_{datetime.now().strftime('%Y%m%d')}.pdf",
+            mime="application/pdf"
+        )
+    # --- [AKHIR PERUBAHAN] ---
+
 else:
     st.info("Metrik akan ditampilkan di sini setelah ada data yang cocok dengan filter.")
 
 st.markdown("---")
 st.header("Visualisasi Performa")
 
-# --- Heatmap Kalender (dengan perbaikan definitif) ---
 st.subheader("🗓️ Heatmap Kalender P/L Harian")
 if not filtered_df.empty:
-    # --- [PERBAIKAN DEFINITIF DI SINI] ---
     df_for_cal = filtered_df.copy()
     df_for_cal['pnl_percent'] = pd.to_numeric(df_for_cal['pnl_percent'], errors='coerce')
     
@@ -269,23 +272,17 @@ if not filtered_df.empty:
         (df_for_cal['pnl_percent'].notna()) &
         (df_for_cal['exit_timestamp'].notna())
     ]
-    # --- [AKHIR PERBAIKAN] ---
     
     if not closed_trades_cal.empty:
         daily_pnl = closed_trades_cal.set_index('exit_timestamp')['pnl_percent'].resample('D').sum()
-        
         start_cal_date = daily_pnl.index.min()
         end_cal_date = datetime.now()
         all_days = pd.date_range(start=start_cal_date, end=end_cal_date, freq='D')
-        
         daily_pnl = daily_pnl.reindex(all_days, fill_value=0)
-        
         dates = daily_pnl.index
         weekdays = dates.dayofweek
         weeks = dates.isocalendar().week
-        
         hover_text = [f"{date.strftime('%Y-%m-%d')}<br>P/L: {pnl:.2f}%" for date, pnl in daily_pnl.items()]
-        
         fig = go.Figure(data=go.Heatmap(
             z=daily_pnl.values, x=weeks, y=weekdays,
             text=hover_text, hoverinfo='text',
@@ -301,15 +298,12 @@ if not filtered_df.empty:
 else:
     st.info("Tidak ada data untuk menampilkan heatmap.")
 
-# --- Tabs ---
 tab1, tab2, tab3 = st.tabs(["📈 Kurva Ekuitas", "📊 Analisis per Aset", "📜 Detail Transaksi"])
 with tab1:
     if not filtered_df.empty:
-        # Terapkan pembersihan data yang sama di sini untuk konsistensi
         equity_df = filtered_df[(filtered_df['status'] == 'closed')].copy()
         equity_df['pnl_percent'] = pd.to_numeric(equity_df['pnl_percent'], errors='coerce')
         equity_df.dropna(subset=['pnl_percent', 'exit_timestamp'], inplace=True)
-
         if not equity_df.empty:
             equity_df.sort_values(by='exit_timestamp', inplace=True)
             equity_df['cumulative_pnl'] = equity_df['pnl_percent'].cumsum()
@@ -326,11 +320,9 @@ with tab1:
 
 with tab2:
     if not filtered_df.empty:
-        # Terapkan pembersihan data yang sama di sini
         pnl_by_pair_df = filtered_df[(filtered_df['status'] == 'closed')].copy()
         pnl_by_pair_df['pnl_percent'] = pd.to_numeric(pnl_by_pair_df['pnl_percent'], errors='coerce')
         pnl_by_pair_df.dropna(subset=['pnl_percent'], inplace=True)
-        
         if not pnl_by_pair_df.empty:
             pnl_by_pair = pnl_by_pair_df.groupby('pair')['pnl_percent'].sum().sort_values(ascending=False)
             fig_pair_pnl = px.bar(pnl_by_pair, title="Total P/L (%) per Aset", labels={'value': 'Total P/L (%)', 'pair': 'Aset'})
