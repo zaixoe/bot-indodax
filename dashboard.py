@@ -2,7 +2,7 @@
 #           APEX QUANTUM ANALYTICS TERMINAL (AQAT) - v1.7 (UI/UX Refined) 
 # ==============================================================================
 # SEBUAH DASHBOARD STREAMLIT UNTUK ANALISIS PERFORMA TRADING BOT TINGKAT LANJUT
-# VERSI INI MEMINDAHKAN TOMBOL UNDUH PDF KE HALAMAN UTAMA UNTUK INTUITIVITAS
+# VERSI INI MEMINDAHKAN TOMBOL UNDUH PDF KE HALAMAN UTAMA UNTUK INTUITIVITAS 
 # ==============================================================================
 
 import streamlit as st
