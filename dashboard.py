@@ -144,32 +144,79 @@ def calculate_advanced_metrics(_df):
         "expectancy_percent": expectancy
     }
             
+# [ Di dashboard.py, ganti seluruh fungsi ini ]
+
 @st.cache_data
 def generate_pdf_report(_df, _metrics, date_range):
-    # ... (Fungsi ini sepertinya sudah baik, tidak perlu diubah) ...
-    pdf = FPDF(); pdf.add_page(); pdf.set_font("Arial", 'B', 16)
+    """
+    Membuat laporan PDF dengan penanganan defensif terhadap data P/L
+    dan timestamp yang mungkin hilang.
+    """
+    pdf = FPDF()
+    pdf.add_page()
+    pdf.set_font("Arial", 'B', 16)
     pdf.cell(0, 10, "Apex Trading Bot - Performance Report", 0, 1, 'C')
     pdf.set_font("Arial", '', 10)
     pdf.cell(0, 10, f"Periode: {date_range[0].strftime('%Y-%m-%d')} hingga {date_range[1].strftime('%Y-%m-%d')}", 0, 1, 'C')
-    pdf.ln(5); pdf.set_font("Arial", 'B', 12); pdf.cell(0, 10, "Key Performance Indicators", 0, 1)
+    pdf.ln(5)
+    
+    pdf.set_font("Arial", 'B', 12)
+    pdf.cell(0, 10, "Key Performance Indicators", 0, 1)
     pdf.set_font("Arial", '', 10)
-    metrics_to_show = {"Total Net P/L (%)": f"{_metrics['total_pnl_percent']:.2f}%", "Win Rate (%)": f"{_metrics['win_rate_percent']:.2f}%",
-                       "Profit Factor": f"{_metrics['profit_factor']:.2f}", "Sharpe Ratio (Annualized)": f"{_metrics['sharpe_ratio']:.2f}",
-                       "Maximum Drawdown (%)": f"{_metrics['max_drawdown_percent']:.2f}%", "Total Trades": str(_metrics['total_trades'])}
+    
+    # Menangani nilai tak terhingga (infinity) untuk Profit Factor
+    profit_factor_display = f"{_metrics['profit_factor']:.2f}" if not math.isinf(_metrics['profit_factor']) else "∞ (No Losses)"
+    
+    metrics_to_show = {
+        "Total Net P/L (%)": f"{_metrics['total_pnl_percent']:.2f}%",
+        "Win Rate (%)": f"{_metrics['win_rate_percent']:.2f}%",
+        "Profit Factor": profit_factor_display,
+        "Sharpe Ratio (Annualized)": f"{_metrics['sharpe_ratio']:.2f}",
+        "Maximum Drawdown (%)": f"{_metrics['max_drawdown_percent']:.2f}%",
+        "Total Trades": str(_metrics['total_trades'])
+    }
     for key, value in metrics_to_show.items():
-        pdf.cell(95, 7, f"  {key}:", 'B', 0); pdf.cell(95, 7, value, 'B', 1, 'R')
-    pdf.ln(5); pdf.set_font("Arial", 'B', 12); pdf.cell(0, 10, "Top 5 & Bottom 5 Trades", 0, 1)
+        pdf.cell(95, 7, f"  {key}:", 'B', 0)
+        pdf.cell(95, 7, value, 'B', 1, 'R')
+    
+    pdf.ln(5)
+    pdf.set_font("Arial", 'B', 12)
+    pdf.cell(0, 10, "Top 5 & Bottom 5 Trades", 0, 1)
     pdf.set_font("Arial", 'B', 8)
-    pdf.cell(40, 6, 'Pair', 1, 0, 'C'); pdf.cell(40, 6, 'Strategy', 1, 0, 'C');
-    pdf.cell(40, 6, 'Entry Date', 1, 0, 'C'); pdf.cell(30, 6, 'P/L (%)', 1, 1, 'C')
+    pdf.cell(40, 6, 'Pair', 1, 0, 'C')
+    pdf.cell(40, 6, 'Strategy', 1, 0, 'C')
+    pdf.cell(40, 6, 'Entry Date', 1, 0, 'C')
+    pdf.cell(30, 6, 'P/L (%)', 1, 1, 'C')
     pdf.set_font("Arial", '', 8)
-    closed_trades = _df[(_df['status'] == 'closed') & _df['pnl_percent'].notna()].sort_values('pnl_percent', ascending=False)
+
+    # --- [PERBAIKAN KUNCI DI SINI] ---
+    # 1. Pastikan kita hanya bekerja dengan trade yang sudah ditutup.
+    # 2. Paksa 'pnl_percent' menjadi numerik dan hapus baris yang gagal.
+    # 3. Hapus baris di mana 'entry_timestamp' juga kosong.
+    closed_trades = _df[
+        (_df['status'] == 'closed')
+    ].copy()
+    closed_trades['pnl_percent'] = pd.to_numeric(closed_trades['pnl_percent'], errors='coerce')
+    closed_trades.dropna(subset=['pnl_percent', 'entry_timestamp'], inplace=True)
+    # --- [AKHIR PERBAIKAN] ---
+
     if not closed_trades.empty:
-        for _, row in pd.concat([closed_trades.head(5), closed_trades.tail(5)]).iterrows():
-            pdf.cell(40, 5, str(row['pair']), 1); pdf.cell(40, 5, str(row['strategy_type']), 1)
-            pdf.cell(40, 5, row['entry_timestamp'].strftime('%Y-%m-%d'), 1); pdf.cell(30, 5, f"{row['pnl_percent']:.2f}%", 1, 1, 'R')
-    pdf.ln(5); pdf.set_font("Arial", 'I', 8)
+        closed_trades.sort_values('pnl_percent', ascending=False, inplace=True)
+        # Gabungkan 5 terbaik dan 5 terburuk
+        trades_to_display = pd.concat([closed_trades.head(5), closed_trades.tail(5)]).drop_duplicates()
+        
+        for _, row in trades_to_display.iterrows():
+            pdf.cell(40, 5, str(row.get('pair', 'N/A')), 1)
+            pdf.cell(40, 5, str(row.get('strategy_type', 'N/A')), 1)
+            pdf.cell(40, 5, row['entry_timestamp'].strftime('%Y-%m-%d'), 1)
+            pdf.cell(30, 5, f"{row['pnl_percent']:.2f}%", 1, 1, 'R')
+    else:
+        pdf.cell(0, 5, "Tidak ada data trade yang ditutup untuk ditampilkan.", 1, 1, 'C')
+
+    pdf.ln(5)
+    pdf.set_font("Arial", 'I', 8)
     pdf.cell(0, 10, "This report is generated for analytical purposes and does not constitute investment advice.", 0, 1, 'C')
+    
     return pdf.output(dest='S').encode('latin-1')
 
 
