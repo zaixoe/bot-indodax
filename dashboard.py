@@ -3,7 +3,7 @@
 # ==============================================================================
 # SEBUAH DASHBOARD STREAMLIT UNTUK ANALISIS PERFORMA TRADING BOT TINGKAT LANJUT
 # VERSI INI MEMINDAHKAN TOMBOL UNDUH PDF KE HALAMAN UTAMA UNTUK INTUITIVITAS
-# ==============================================================================
+# =============================================================================
 
 import streamlit as st
 import requests
