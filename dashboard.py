@@ -143,28 +143,31 @@ def calculate_advanced_metrics(_df):
         "max_drawdown_percent": max_drawdown,
         "expectancy_percent": expectancy
     }
-            
+
 # [ Di dashboard.py, ganti seluruh fungsi ini ]
 
 @st.cache_data
 def generate_pdf_report(_df, _metrics, date_range):
     """
-    Membuat laporan PDF dengan penanganan defensif terhadap data P/L
-    dan timestamp yang mungkin hilang.
+    Versi 1.5: Membuat laporan PDF dengan menghapus kolom objek (trade_data)
+    sebelum operasi DataFrame untuk mencegah TypeError.
     """
     pdf = FPDF()
     pdf.add_page()
     pdf.set_font("Arial", 'B', 16)
     pdf.cell(0, 10, "Apex Trading Bot - Performance Report", 0, 1, 'C')
     pdf.set_font("Arial", '', 10)
-    pdf.cell(0, 10, f"Periode: {date_range[0].strftime('%Y-%m-%d')} hingga {date_range[1].strftime('%Y-%m-%d')}", 0, 1, 'C')
+    
+    # Pastikan date_range adalah list/tuple dengan 2 elemen sebelum diakses
+    if isinstance(date_range, (list, tuple)) and len(date_range) == 2:
+        pdf.cell(0, 10, f"Periode: {date_range[0].strftime('%Y-%m-%d')} hingga {date_range[1].strftime('%Y-%m-%d')}", 0, 1, 'C')
+    
     pdf.ln(5)
     
     pdf.set_font("Arial", 'B', 12)
     pdf.cell(0, 10, "Key Performance Indicators", 0, 1)
     pdf.set_font("Arial", '', 10)
     
-    # Menangani nilai tak terhingga (infinity) untuk Profit Factor
     profit_factor_display = f"{_metrics['profit_factor']:.2f}" if not math.isinf(_metrics['profit_factor']) else "∞ (No Losses)"
     
     metrics_to_show = {
@@ -189,21 +192,25 @@ def generate_pdf_report(_df, _metrics, date_range):
     pdf.cell(30, 6, 'P/L (%)', 1, 1, 'C')
     pdf.set_font("Arial", '', 8)
 
-    # --- [PERBAIKAN KUNCI DI SINI] ---
-    # 1. Pastikan kita hanya bekerja dengan trade yang sudah ditutup.
-    # 2. Paksa 'pnl_percent' menjadi numerik dan hapus baris yang gagal.
-    # 3. Hapus baris di mana 'entry_timestamp' juga kosong.
-    closed_trades = _df[
-        (_df['status'] == 'closed')
-    ].copy()
+    closed_trades = _df[(_df['status'] == 'closed')].copy()
     closed_trades['pnl_percent'] = pd.to_numeric(closed_trades['pnl_percent'], errors='coerce')
     closed_trades.dropna(subset=['pnl_percent', 'entry_timestamp'], inplace=True)
-    # --- [AKHIR PERBAIKAN] ---
 
     if not closed_trades.empty:
-        closed_trades.sort_values('pnl_percent', ascending=False, inplace=True)
-        # Gabungkan 5 terbaik dan 5 terburuk
-        trades_to_display = pd.concat([closed_trades.head(5), closed_trades.tail(5)]).drop_duplicates()
+        # --- [PERBAIKAN KUNCI DI SINI] ---
+        # Hapus kolom 'trade_data' jika ada, karena mengandung objek yang tidak bisa dibandingkan
+        if 'trade_data' in closed_trades.columns:
+            closed_trades_for_display = closed_trades.drop(columns=['trade_data'])
+        else:
+            closed_trades_for_display = closed_trades
+
+        closed_trades_for_display.sort_values('pnl_percent', ascending=False, inplace=True)
+        
+        trades_to_display = pd.concat([
+            closed_trades_for_display.head(5), 
+            closed_trades_for_display.tail(5)
+        ]).drop_duplicates()
+        # --- [AKHIR PERBAIKAN] ---
         
         for _, row in trades_to_display.iterrows():
             pdf.cell(40, 5, str(row.get('pair', 'N/A')), 1)
