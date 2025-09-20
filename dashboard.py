@@ -1,8 +1,8 @@
 # ==============================================================================
-#           APEX QUANTUM ANALYTICS TERMINAL (AQAT) - v1.7 (UI/UX Refined) 
+#           APEX QUANTUM ANALYTICS TERMINAL (AQAT) - v1.7 (UI/UX Refined)
 # ==============================================================================
 # SEBUAH DASHBOARD STREAMLIT UNTUK ANALISIS PERFORMA TRADING BOT TINGKAT LANJUT
-# VERSI INI MEMINDAHKAN TOMBOL UNDUH PDF KE HALAMAN UTAMA UNTUK INTUITIVITAS 
+# VERSI INI MEMINDAHKAN TOMBOL UNDUH PDF KE HALAMAN UTAMA UNTUK INTUITIVITAS
 # ==============================================================================
 
 import streamlit as st
@@ -61,9 +61,11 @@ def get_trades_data(endpoint):
 @st.cache_data
 def calculate_advanced_metrics(_df):
     """
-    Versi 1.4: Menghitung metrik dengan langkah pembersihan data eksplisit.
+    Versi 1.5: Menambahkan filter untuk outlier P/L yang tidak realistis
+    (misalnya, kerugian > 100%) untuk menjaga integritas KPI.
     """
     if _df.empty or 'status' not in _df.columns or 'pnl_percent' not in _df.columns:
+        # Kembalikan struktur data default
         return {"total_pnl_percent": 0, "total_trades": 0, "win_rate_percent": 0, "profit_factor": 0,
                 "sharpe_ratio": 0, "max_drawdown_percent": 0, "expectancy_percent": 0,
                 "winning_trades": 0, "losing_trades": 0}
@@ -72,7 +74,14 @@ def calculate_advanced_metrics(_df):
     df['pnl_percent'] = pd.to_numeric(df['pnl_percent'], errors='coerce')
     df.dropna(subset=['pnl_percent'], inplace=True)
     
+    # --- [PERBAIKAN KUNCI DI SINI] ---
+    # Hapus data yang tidak masuk akal. Kerugian tidak mungkin lebih dari 100%.
+    # Kita beri sedikit buffer, misalnya -100.1% untuk menangani pembulatan.
+    df = df[df['pnl_percent'] > -100.1]
+    # --- [AKHIR PERBAIKAN] ---
+
     if df.empty:
+        # Kembalikan nilai default jika tidak ada data yang valid setelah difilter
         return {"total_pnl_percent": 0, "total_trades": 0, "win_rate_percent": 0, "profit_factor": 0,
                 "sharpe_ratio": 0, "max_drawdown_percent": 0, "expectancy_percent": 0,
                 "winning_trades": 0, "losing_trades": 0}
