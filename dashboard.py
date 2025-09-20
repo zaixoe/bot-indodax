@@ -1,5 +1,5 @@
 # ==============================================================================
-#           APEX QUANTUM ANALYTICS TERMINAL (AQAT) - v1.2
+#           APEX QUANTUM ANALYTICS TERMINAL (AQAT) - v1.3 (Robust Edition)
 # ==============================================================================
 # SEBUAH DASHBOARD STREAMLIT UNTUK ANALISIS PERFORMA TRADING BOT TINGKAT LANJUT
 # FITUR: Live Signal Analysis, What-If Simulation, Quantitative Metrics,
@@ -14,6 +14,7 @@ import plotly.express as px
 import plotly.graph_objects as go
 from datetime import datetime
 from fpdf import FPDF
+import math
 
 # --- [1] KONFIGURASI HALAMAN & GAYA ---
 st.set_page_config(layout="wide", page_title="Apex Quantum Analytics", page_icon="🤖")
@@ -27,9 +28,26 @@ HEADERS = {"X-API-Key": API_KEY}
 
 # --- [3] FUNGSI-FUNGSI PENGOLAHAN DATA & ANALITIK ---
 
-@st.cache_data(ttl=30)
-def get_data(endpoint):
-    """Fungsi generik untuk mengambil data dari backend API."""
+# [PERBAIKAN] Fungsi terpisah untuk sinyal (tanpa cache) agar selalu live
+def get_live_signals(endpoint):
+    """Fungsi untuk mengambil sinyal live (TIDAK di-cache)."""
+    try:
+        response = requests.get(f"{BASE_URL}/{endpoint}", headers=HEADERS, timeout=10)
+        response.raise_for_status()
+        data = response.json()
+        if not data: return pd.DataFrame()
+        
+        df = pd.DataFrame(data)
+        if 'timestamp' in df.columns:
+            df['timestamp'] = pd.to_datetime(df['timestamp'], errors='coerce')
+        return df
+    except requests.exceptions.RequestException:
+        # Jangan tampilkan error di UI, cukup kembalikan df kosong
+        return pd.DataFrame()
+
+# [PERBAIKAN] Fungsi terpisah untuk data historis (bisa di-cache)
+def get_trades_data(endpoint):
+    """Fungsi untuk mengambil data historis trade."""
     try:
         response = requests.get(f"{BASE_URL}/{endpoint}", headers=HEADERS, timeout=20)
         response.raise_for_status()
@@ -37,6 +55,7 @@ def get_data(endpoint):
         if not data: return pd.DataFrame()
         
         df = pd.DataFrame(data)
+        # Konversi kolom tanggal/waktu dengan penanganan error
         if 'timestamp' in df.columns:
             df['timestamp'] = pd.to_datetime(df['timestamp'], errors='coerce')
         if 'entry_timestamp' in df.columns:
@@ -48,57 +67,69 @@ def get_data(endpoint):
         st.sidebar.error(f"Koneksi API Gagal: {e}")
         return pd.DataFrame()
 
-# GANTI FUNGSI INI DI dashboard.py
-
+# [PERBAIKAN KRITIS] Fungsi kalkulasi metrik dibuat sangat tangguh
 @st.cache_data
 def calculate_advanced_metrics(_df):
-    """Menghitung metrik statistik kuantitatif dari DataFrame trade."""
-    
-    # Penjaga gerbang utama untuk fungsi ini
+    """
+    Menghitung metrik statistik kuantitatif dari DataFrame trade.
+    Versi ini sangat tangguh terhadap data P/L yang hilang.
+    """
     if _df.empty or 'status' not in _df.columns or 'pnl_percent' not in _df.columns:
         return {"total_pnl_percent": 0, "total_trades": 0, "win_rate_percent": 0, "profit_factor": 0,
                 "sharpe_ratio": 0, "max_drawdown_percent": 0, "expectancy_percent": 0,
                 "winning_trades": 0, "losing_trades": 0}
 
-    df = _df[_df['status'] == 'closed'].dropna(subset=['pnl_percent'])
+    df = _df[(_df['status'] == 'closed') & (_df['pnl_percent'].notna())].copy()
     
-    # Penjaga kedua yang lebih lengkap untuk kasus 0 atau 1 trade
-    if df.empty or len(df) < 2:
-        total_pnl = df['pnl_percent'].sum() if not df.empty else 0
-        winning_trades_count = len(df[df['pnl_percent'] > 0])
-        return {
-            "total_pnl_percent": total_pnl,
-            "total_trades": len(df),
-            "winning_trades": winning_trades_count,
-            "losing_trades": len(df) - winning_trades_count,
-            "win_rate_percent": 100 if len(df) > 0 and winning_trades_count == len(df) else 0,
-            "profit_factor": float('inf') if total_pnl > 0 else 0,
-            "sharpe_ratio": 0, "max_drawdown_percent": 0,
-            "expectancy_percent": df['pnl_percent'].mean() if not df.empty else 0
-        }
+    if df.empty:
+        return {"total_pnl_percent": 0, "total_trades": 0, "win_rate_percent": 0, "profit_factor": 0,
+                "sharpe_ratio": 0, "max_drawdown_percent": 0, "expectancy_percent": 0,
+                "winning_trades": 0, "losing_trades": 0}
 
-    # Kalkulasi penuh jika ada cukup data
-    total_trades = len(df); pnl = df['pnl_percent']
-    wins = pnl[pnl > 0]; losses = pnl[pnl <= 0]
-    win_rate = (len(wins) / total_trades * 100)
-    total_profit = wins.sum(); total_loss = abs(losses.sum())
+    total_trades = len(df)
+    pnl = df['pnl_percent']
+    
+    wins = pnl[pnl > 0]
+    losses = pnl[pnl <= 0]
+    
+    winning_trades_count = len(wins)
+    losing_trades_count = len(losses)
+    
+    win_rate = (winning_trades_count / total_trades * 100) if total_trades > 0 else 0
+    total_profit = wins.sum()
+    total_loss = abs(losses.sum())
+    
     profit_factor = total_profit / total_loss if total_loss > 0 else float('inf')
-    avg_return = pnl.mean(); std_return = pnl.std()
-    sharpe_ratio = (avg_return / std_return) * np.sqrt(365) if std_return > 0 else 0
-    df_sorted = df.sort_values(by='exit_timestamp'); cumulative_pnl = df_sorted['pnl_percent'].cumsum()
-    running_max = cumulative_pnl.cummax(); drawdown = running_max - cumulative_pnl
+    
+    avg_return = pnl.mean()
+    std_return = pnl.std()
+    sharpe_ratio = (avg_return / std_return) * np.sqrt(365) if std_return is not None and std_return > 0 else 0
+    
+    df.sort_values(by='exit_timestamp', inplace=True)
+    df['cumulative_pnl'] = df['pnl_percent'].cumsum()
+    running_max = df['cumulative_pnl'].cummax()
+    drawdown = running_max - df['cumulative_pnl']
     max_drawdown = drawdown.max() if not drawdown.empty else 0
+    
     avg_win = wins.mean() if not wins.empty else 0
     avg_loss = abs(losses.mean()) if not losses.empty else 0
-    expectancy = ((win_rate / 100) * avg_win) - ((1 - win_rate / 100) * avg_loss)
+    expectancy = ((win_rate / 100) * avg_win) - ((100 - win_rate) / 100 * avg_loss) if total_trades > 0 else 0
     
-    return {"total_pnl_percent": total_profit - total_loss, "total_trades": total_trades,
-            "winning_trades": len(wins), "losing_trades": len(losses), "win_rate_percent": win_rate,
-            "profit_factor": profit_factor, "sharpe_ratio": sharpe_ratio,
-            "max_drawdown_percent": max_drawdown, "expectancy_percent": expectancy}
+    return {
+        "total_pnl_percent": pnl.sum(),
+        "total_trades": total_trades,
+        "winning_trades": winning_trades_count,
+        "losing_trades": losing_trades_count,
+        "win_rate_percent": win_rate,
+        "profit_factor": profit_factor,
+        "sharpe_ratio": sharpe_ratio,
+        "max_drawdown_percent": max_drawdown,
+        "expectancy_percent": expectancy
+    }
             
 @st.cache_data
 def generate_pdf_report(_df, _metrics, date_range):
+    # ... (Fungsi ini sepertinya sudah baik, tidak perlu diubah) ...
     pdf = FPDF(); pdf.add_page(); pdf.set_font("Arial", 'B', 16)
     pdf.cell(0, 10, "Apex Trading Bot - Performance Report", 0, 1, 'C')
     pdf.set_font("Arial", '', 10)
@@ -115,10 +146,11 @@ def generate_pdf_report(_df, _metrics, date_range):
     pdf.cell(40, 6, 'Pair', 1, 0, 'C'); pdf.cell(40, 6, 'Strategy', 1, 0, 'C');
     pdf.cell(40, 6, 'Entry Date', 1, 0, 'C'); pdf.cell(30, 6, 'P/L (%)', 1, 1, 'C')
     pdf.set_font("Arial", '', 8)
-    closed_trades = _df[_df['status'] == 'closed'].sort_values('pnl_percent', ascending=False).dropna(subset=['entry_timestamp', 'pnl_percent'])
-    for _, row in pd.concat([closed_trades.head(5), closed_trades.tail(5)]).iterrows():
-        pdf.cell(40, 5, str(row['pair']), 1); pdf.cell(40, 5, str(row['strategy_type']), 1)
-        pdf.cell(40, 5, row['entry_timestamp'].strftime('%Y-%m-%d'), 1); pdf.cell(30, 5, f"{row['pnl_percent']:.2f}%", 1, 1, 'R')
+    closed_trades = _df[(_df['status'] == 'closed') & _df['pnl_percent'].notna()].sort_values('pnl_percent', ascending=False)
+    if not closed_trades.empty:
+        for _, row in pd.concat([closed_trades.head(5), closed_trades.tail(5)]).iterrows():
+            pdf.cell(40, 5, str(row['pair']), 1); pdf.cell(40, 5, str(row['strategy_type']), 1)
+            pdf.cell(40, 5, row['entry_timestamp'].strftime('%Y-%m-%d'), 1); pdf.cell(30, 5, f"{row['pnl_percent']:.2f}%", 1, 1, 'R')
     pdf.ln(5); pdf.set_font("Arial", 'I', 8)
     pdf.cell(0, 10, "This report is generated for analytical purposes and does not constitute investment advice.", 0, 1, 'C')
     return pdf.output(dest='S').encode('latin-1')
@@ -127,8 +159,9 @@ def generate_pdf_report(_df, _metrics, date_range):
 # --- [4] TAMPILAN UTAMA DASHBOARD ---
 st.title("Apex Trading Analytics Terminal")
 
-signals_df = get_data("signals")
-master_df = get_data("trades")
+# [PERBAIKAN] Panggil fungsi yang sesuai dengan strategi cache yang benar
+signals_df = get_live_signals("signals") 
+master_df = st.cache_data(get_trades_data, ttl=60)("trades")
 
 # --- Live Signal Radar & Analysis ---
 st.header("📡 Live Signal Radar")
@@ -152,24 +185,30 @@ st.markdown("---")
 # --- Expander untuk Filter & Simulasi ---
 with st.expander("⚙️ Filter Analisis & Opsi Laporan", expanded=True):
     if not master_df.empty:
-        # Fitur #4: Simulasi "What-If" (Placeholder)
-        st.markdown("**Simulasi 'What-If' pada Data Historis:**")
-        sim_min_adx = st.slider("Filter Trade Berdasarkan ADX Saat Masuk ≥", 20, 60, 25)
-        st.caption("Info: Fitur simulasi memerlukan data 'ADX saat masuk' untuk disimpan pada setiap trade.")
-        
-        # Filter standar
         col1, col2, col3 = st.columns(3)
         with col1:
-            date_range = st.date_input("Pilih Rentang Waktu", value=(master_df['entry_timestamp'].min().date(), datetime.now().date()))
+            min_date = master_df['entry_timestamp'].min().date()
+            max_date = datetime.now().date()
+            date_range = st.date_input("Pilih Rentang Waktu", value=(min_date, max_date), min_value=min_date, max_value=max_date)
         with col2:
-            selected_pairs = st.multiselect("Pilih Aset", sorted(master_df['pair'].unique()), default=sorted(master_df['pair'].unique()))
+            all_pairs = sorted(master_df['pair'].unique())
+            selected_pairs = st.multiselect("Pilih Aset", all_pairs, default=all_pairs)
         with col3:
-            selected_strategies = st.multiselect("Pilih Strategi", sorted(master_df['strategy_type'].unique()), default=sorted(master_df['strategy_type'].unique()))
+            all_strategies = sorted(master_df['strategy_type'].dropna().unique())
+            selected_strategies = st.multiselect("Pilih Strategi", all_strategies, default=all_strategies)
 
-        start_date = datetime.combine(date_range[0], datetime.min.time())
-        end_date = datetime.combine(date_range[1], datetime.max.time())
-        filtered_df = master_df[(master_df['entry_timestamp'] >= start_date) & (master_df['entry_timestamp'] <= end_date) &
-                                (master_df['pair'].isin(selected_pairs)) & (master_df['strategy_type'].isin(selected_strategies))].copy()
+        if len(date_range) == 2:
+            start_date = datetime.combine(date_range[0], datetime.min.time())
+            end_date = datetime.combine(date_range[1], datetime.max.time())
+            
+            filtered_df = master_df[
+                (master_df['entry_timestamp'] >= start_date) & 
+                (master_df['entry_timestamp'] <= end_date) &
+                (master_df['pair'].isin(selected_pairs)) & 
+                (master_df['strategy_type'].isin(selected_strategies))
+            ].copy()
+        else:
+            filtered_df = pd.DataFrame()
     else:
         st.info("Filter dan simulasi akan aktif setelah ada data transaksi.")
         filtered_df = pd.DataFrame()
@@ -181,15 +220,16 @@ if not filtered_df.empty:
     cols = st.columns(4)
     cols[0].metric("Total Net P/L (%)", f"{metrics['total_pnl_percent']:.2f}%")
     cols[1].metric("Win Rate", f"{metrics['win_rate_percent']:.1f}%")
-    cols[2].metric("Profit Factor", f"{metrics['profit_factor']:.2f}")
+    cols[2].metric("Profit Factor", f"{metrics['profit_factor']:.2f}" if not math.isinf(metrics['profit_factor']) else "∞")
     cols[3].metric("Sharpe Ratio (Ann.)", f"{metrics['sharpe_ratio']:.2f}")
-    cols = st.columns(4)
-    cols[0].metric("Maximum Drawdown (%)", f"{metrics['max_drawdown_percent']:.2f}%")
-    cols[1].metric("Expectancy per Trade (%)", f"{metrics['expectancy_percent']:.2f}%")
-    cols[2].metric("Total Trades", metrics['total_trades'])
-    cols[3].metric("Menang / Kalah", f"{metrics['winning_trades']} / {metrics['losing_trades']}")
+    
+    cols_b = st.columns(4)
+    cols_b[0].metric("Maximum Drawdown (%)", f"{metrics['max_drawdown_percent']:.2f}%")
+    cols_b[1].metric("Expectancy per Trade (%)", f"{metrics['expectancy_percent']:.2f}%")
+    cols_b[2].metric("Total Trades", metrics['total_trades'])
+    cols_b[3].metric("Menang / Kalah", f"{metrics['winning_trades']} / {metrics['losing_trades']}")
 
-    if 'date_range' in locals():
+    if 'date_range' in locals() and len(date_range) == 2:
         pdf_data = generate_pdf_report(filtered_df, metrics, date_range)
         st.sidebar.download_button(label="📄 Unduh Laporan PDF", data=pdf_data,
                                    file_name=f"apex_report_{datetime.now().strftime('%Y%m%d')}.pdf", mime="application/pdf")
@@ -201,50 +241,37 @@ st.header("Visualisasi Performa")
 
 # --- Heatmap Kalender (Versi Plotly) ---
 st.subheader("🗓️ Heatmap Kalender P/L Harian")
-if not filtered_df.empty and 'exit_timestamp' in filtered_df.columns and not filtered_df['exit_timestamp'].isnull().all():
-    closed_trades_cal = filtered_df[filtered_df['status'] == 'closed'].dropna(subset=['exit_timestamp', 'pnl_percent'])
+if not filtered_df.empty:
+    # [PERBAIKAN] Saring data tidak valid sebelum membuat heatmap
+    closed_trades_cal = filtered_df[
+        (filtered_df['status'] == 'closed') & 
+        (filtered_df['pnl_percent'].notna()) &
+        (filtered_df['exit_timestamp'].notna())
+    ].copy()
+    
     if not closed_trades_cal.empty:
-        # 1. Siapkan data untuk heatmap
-        daily_pnl = closed_trades_cal.set_index('exit_timestamp')['pnl_percent'].resample('D').sum().fillna(0)
+        daily_pnl = closed_trades_cal.set_index('exit_timestamp')['pnl_percent'].resample('D').sum()
         
-        # Buat kalender penuh untuk setahun terakhir untuk tampilan yang konsisten
-        start_date = daily_pnl.index.min()
-        end_date = datetime.now()
-        all_days = pd.date_range(start=start_date, end=end_date, freq='D')
+        start_cal_date = daily_pnl.index.min()
+        end_cal_date = datetime.now()
+        all_days = pd.date_range(start=start_cal_date, end=end_cal_date, freq='D')
         
-        # Gabungkan data P/L dengan kalender penuh
         daily_pnl = daily_pnl.reindex(all_days, fill_value=0)
         
-        # Ekstrak komponen tanggal yang dibutuhkan oleh Plotly
         dates = daily_pnl.index
         weekdays = dates.dayofweek
         weeks = dates.isocalendar().week
         
-        # Buat teks hover
         hover_text = [f"{date.strftime('%Y-%m-%d')}<br>P/L: {pnl:.2f}%" for date, pnl in daily_pnl.items()]
         
-        # 2. Buat objek heatmap Plotly
         fig = go.Figure(data=go.Heatmap(
-            z=daily_pnl.values,
-            x=weeks,
-            y=weekdays,
-            text=hover_text,
-            hoverinfo='text',
-            colorscale='Viridis', # Skala warna yang sama dengan calmap
-            showscale=False # Sembunyikan legenda warna
+            z=daily_pnl.values, x=weeks, y=weekdays,
+            text=hover_text, hoverinfo='text',
+            colorscale='Viridis', showscale=False
         ))
-
-        # 3. Atur tata letak agar terlihat seperti kalender
         fig.update_layout(
-            yaxis=dict(
-                tickmode='array',
-                tickvals=[0, 1, 2, 3, 4, 5, 6],
-                ticktext=['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun']
-            ),
-            xaxis_title="Minggu dalam Setahun",
-            yaxis_title="",
-            title_text="Heatmap Performa Harian",
-            height=300
+            yaxis=dict(tickmode='array', tickvals=list(range(7)), ticktext=['Sen', 'Sel', 'Rab', 'Kam', 'Jum', 'Sab', 'Min']),
+            xaxis_title="Minggu dalam Setahun", yaxis_title="", height=300
         )
         st.plotly_chart(fig, use_container_width=True)
     else:
@@ -255,33 +282,33 @@ else:
 # --- Tabs ---
 tab1, tab2, tab3 = st.tabs(["📈 Kurva Ekuitas", "📊 Analisis per Aset", "📜 Detail Transaksi"])
 with tab1:
-    if not filtered_df.empty and 'status' in filtered_df.columns:
-        equity_df = filtered_df[filtered_df['status'] == 'closed'].copy()
+    if not filtered_df.empty:
+        equity_df = filtered_df[(filtered_df['status'] == 'closed') & (filtered_df['pnl_percent'].notna())].copy()
         if not equity_df.empty:
             equity_df.sort_values(by='exit_timestamp', inplace=True)
             equity_df['cumulative_pnl'] = equity_df['pnl_percent'].cumsum()
             equity_df['running_max'] = equity_df['cumulative_pnl'].cummax()
             fig = go.Figure()
-            fig.add_trace(go.Scatter(x=equity_df['exit_timestamp'], y=equity_df['running_max'], fill=None, mode='lines', line_color='rgba(255,255,255,0)'))
+            fig.add_trace(go.Scatter(x=equity_df['exit_timestamp'], y=equity_df['running_max'], fill=None, mode='lines', line_color='rgba(0,0,0,0)', showlegend=False))
             fig.add_trace(go.Scatter(x=equity_df['exit_timestamp'], y=equity_df['cumulative_pnl'], fill='tonexty', mode='lines', line_color='cyan', name='Equity Curve'))
             fig.update_layout(title_text='Kurva Pertumbuhan Ekuitas dengan Periode Drawdown (Area Abu-abu)', xaxis_title='Tanggal', yaxis_title='Total P/L Kumulatif (%)', showlegend=False)
             st.plotly_chart(fig, use_container_width=True)
         else:
             st.info("Menunggu data transaksi yang ditutup untuk menampilkan Kurva Ekuitas.")
     else:
-        st.info("Tidak ada data yang cocok dengan filter untuk menampilkan Kurva Ekuitas.")
+        st.info("Tidak ada data untuk menampilkan Kurva Ekuitas.")
 
 with tab2:
-    if not filtered_df.empty and 'status' in filtered_df.columns:
-        pnl_by_pair_df = filtered_df[filtered_df['status'] == 'closed'].copy()
+    if not filtered_df.empty:
+        pnl_by_pair_df = filtered_df[(filtered_df['status'] == 'closed') & (filtered_df['pnl_percent'].notna())].copy()
         if not pnl_by_pair_df.empty:
             pnl_by_pair = pnl_by_pair_df.groupby('pair')['pnl_percent'].sum().sort_values(ascending=False)
-            fig_pair_pnl = px.bar(pnl_by_pair, title="Total P/L (%) per Aset")
+            fig_pair_pnl = px.bar(pnl_by_pair, title="Total P/L (%) per Aset", labels={'value': 'Total P/L (%)', 'pair': 'Aset'})
             st.plotly_chart(fig_pair_pnl, use_container_width=True)
         else:
             st.info("Menunggu data transaksi yang ditutup untuk menampilkan Analisis per Aset.")
     else:
-        st.info("Tidak ada data yang cocok dengan filter untuk menampilkan Analisis per Aset.")
+        st.info("Tidak ada data untuk menampilkan Analisis per Aset.")
         
 with tab3:
     if not filtered_df.empty:
