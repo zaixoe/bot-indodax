@@ -67,25 +67,38 @@ def get_trades_data(endpoint):
         st.sidebar.error(f"Koneksi API Gagal: {e}")
         return pd.DataFrame()
 
-# [PERBAIKAN KRITIS] Fungsi kalkulasi metrik dibuat sangat tangguh
+# [ Di dashboard.py, ganti seluruh fungsi ini ]
+
 @st.cache_data
 def calculate_advanced_metrics(_df):
     """
-    Menghitung metrik statistik kuantitatif dari DataFrame trade.
-    Versi ini sangat tangguh terhadap data P/L yang hilang.
+    Versi 1.4: Menghitung metrik dengan langkah pembersihan data eksplisit
+    untuk menangani tipe data yang tidak konsisten dan mencegah TypeError.
     """
     if _df.empty or 'status' not in _df.columns or 'pnl_percent' not in _df.columns:
+        # Kembalikan struktur data default jika input tidak valid
         return {"total_pnl_percent": 0, "total_trades": 0, "win_rate_percent": 0, "profit_factor": 0,
                 "sharpe_ratio": 0, "max_drawdown_percent": 0, "expectancy_percent": 0,
                 "winning_trades": 0, "losing_trades": 0}
 
-    df = _df[(_df['status'] == 'closed') & (_df['pnl_percent'].notna())].copy()
+    # Saring hanya untuk trade yang sudah ditutup
+    df = _df[_df['status'] == 'closed'].copy()
+
+    # --- [PERBAIKAN KUNCI & KRITIS] ---
+    # 1. Paksa kolom pnl_percent menjadi numerik. Nilai yang tidak bisa diubah akan menjadi NaN.
+    df['pnl_percent'] = pd.to_numeric(df['pnl_percent'], errors='coerce')
     
+    # 2. Hapus baris di mana pnl_percent adalah NaN (baik dari awal atau hasil konversi yang gagal).
+    df.dropna(subset=['pnl_percent'], inplace=True)
+    # --- [AKHIR PERBAIKAN] ---
+    
+    # Jika tidak ada trade yang valid setelah dibersihkan, kembalikan nilai default
     if df.empty:
         return {"total_pnl_percent": 0, "total_trades": 0, "win_rate_percent": 0, "profit_factor": 0,
                 "sharpe_ratio": 0, "max_drawdown_percent": 0, "expectancy_percent": 0,
                 "winning_trades": 0, "losing_trades": 0}
 
+    # Dari titik ini, kita bisa yakin bahwa 'pnl' adalah Series numerik murni
     total_trades = len(df)
     pnl = df['pnl_percent']
     
@@ -105,11 +118,15 @@ def calculate_advanced_metrics(_df):
     std_return = pnl.std()
     sharpe_ratio = (avg_return / std_return) * np.sqrt(365) if std_return is not None and std_return > 0 else 0
     
-    df.sort_values(by='exit_timestamp', inplace=True)
-    df['cumulative_pnl'] = df['pnl_percent'].cumsum()
-    running_max = df['cumulative_pnl'].cummax()
-    drawdown = running_max - df['cumulative_pnl']
-    max_drawdown = drawdown.max() if not drawdown.empty else 0
+    # Pastikan exit_timestamp ada sebelum mengurutkan
+    if 'exit_timestamp' in df.columns:
+        df.sort_values(by='exit_timestamp', inplace=True)
+        df['cumulative_pnl'] = df['pnl_percent'].cumsum()
+        running_max = df['cumulative_pnl'].cummax()
+        drawdown = running_max - df['cumulative_pnl']
+        max_drawdown = drawdown.max() if not drawdown.empty else 0
+    else:
+        max_drawdown = 0 # Tidak bisa menghitung tanpa tanggal keluar
     
     avg_win = wins.mean() if not wins.empty else 0
     avg_loss = abs(losses.mean()) if not losses.empty else 0
