@@ -1,9 +1,8 @@
 # ==============================================================================
-#           APEX QUANTUM ANALYTICS TERMINAL (AQAT) - v1.3 (Robust Edition)
+#           APEX QUANTUM ANALYTICS TERMINAL (AQAT) - v1.6 (Definitive Edition)
 # ==============================================================================
 # SEBUAH DASHBOARD STREAMLIT UNTUK ANALISIS PERFORMA TRADING BOT TINGKAT LANJUT
-# FITUR: Live Signal Analysis, What-If Simulation, Quantitative Metrics,
-#        Calendar Heatmap, Drawdown Visualization, PDF Reports.
+# VERSI INI MENERAPKAN PEMBERSIHAN DATA YANG KONSISTEN DI SEMUA BAGIAN
 # ==============================================================================
 
 import streamlit as st
@@ -28,7 +27,6 @@ HEADERS = {"X-API-Key": API_KEY}
 
 # --- [3] FUNGSI-FUNGSI PENGOLAHAN DATA & ANALITIK ---
 
-# [PERBAIKAN] Fungsi terpisah untuk sinyal (tanpa cache) agar selalu live
 def get_live_signals(endpoint):
     """Fungsi untuk mengambil sinyal live (TIDAK di-cache)."""
     try:
@@ -36,16 +34,13 @@ def get_live_signals(endpoint):
         response.raise_for_status()
         data = response.json()
         if not data: return pd.DataFrame()
-        
         df = pd.DataFrame(data)
         if 'timestamp' in df.columns:
             df['timestamp'] = pd.to_datetime(df['timestamp'], errors='coerce')
         return df
     except requests.exceptions.RequestException:
-        # Jangan tampilkan error di UI, cukup kembalikan df kosong
         return pd.DataFrame()
 
-# [PERBAIKAN] Fungsi terpisah untuk data historis (bisa di-cache)
 def get_trades_data(endpoint):
     """Fungsi untuk mengambil data historis trade."""
     try:
@@ -53,11 +48,7 @@ def get_trades_data(endpoint):
         response.raise_for_status()
         data = response.json()
         if not data: return pd.DataFrame()
-        
         df = pd.DataFrame(data)
-        # Konversi kolom tanggal/waktu dengan penanganan error
-        if 'timestamp' in df.columns:
-            df['timestamp'] = pd.to_datetime(df['timestamp'], errors='coerce')
         if 'entry_timestamp' in df.columns:
             df['entry_timestamp'] = pd.to_datetime(df['entry_timestamp'], errors='coerce').dt.tz_localize(None)
         if 'exit_timestamp' in df.columns:
@@ -67,41 +58,27 @@ def get_trades_data(endpoint):
         st.sidebar.error(f"Koneksi API Gagal: {e}")
         return pd.DataFrame()
 
-# [ Di dashboard.py, ganti seluruh fungsi ini ]
-
 @st.cache_data
 def calculate_advanced_metrics(_df):
     """
-    Versi 1.4: Menghitung metrik dengan langkah pembersihan data eksplisit
-    untuk menangani tipe data yang tidak konsisten dan mencegah TypeError.
+    Versi 1.4: Menghitung metrik dengan langkah pembersihan data eksplisit.
     """
     if _df.empty or 'status' not in _df.columns or 'pnl_percent' not in _df.columns:
-        # Kembalikan struktur data default jika input tidak valid
         return {"total_pnl_percent": 0, "total_trades": 0, "win_rate_percent": 0, "profit_factor": 0,
                 "sharpe_ratio": 0, "max_drawdown_percent": 0, "expectancy_percent": 0,
                 "winning_trades": 0, "losing_trades": 0}
 
-    # Saring hanya untuk trade yang sudah ditutup
     df = _df[_df['status'] == 'closed'].copy()
-
-    # --- [PERBAIKAN KUNCI & KRITIS] ---
-    # 1. Paksa kolom pnl_percent menjadi numerik. Nilai yang tidak bisa diubah akan menjadi NaN.
     df['pnl_percent'] = pd.to_numeric(df['pnl_percent'], errors='coerce')
-    
-    # 2. Hapus baris di mana pnl_percent adalah NaN (baik dari awal atau hasil konversi yang gagal).
     df.dropna(subset=['pnl_percent'], inplace=True)
-    # --- [AKHIR PERBAIKAN] ---
     
-    # Jika tidak ada trade yang valid setelah dibersihkan, kembalikan nilai default
     if df.empty:
         return {"total_pnl_percent": 0, "total_trades": 0, "win_rate_percent": 0, "profit_factor": 0,
                 "sharpe_ratio": 0, "max_drawdown_percent": 0, "expectancy_percent": 0,
                 "winning_trades": 0, "losing_trades": 0}
 
-    # Dari titik ini, kita bisa yakin bahwa 'pnl' adalah Series numerik murni
     total_trades = len(df)
     pnl = df['pnl_percent']
-    
     wins = pnl[pnl > 0]
     losses = pnl[pnl <= 0]
     
@@ -118,39 +95,28 @@ def calculate_advanced_metrics(_df):
     std_return = pnl.std()
     sharpe_ratio = (avg_return / std_return) * np.sqrt(365) if std_return is not None and std_return > 0 else 0
     
-    # Pastikan exit_timestamp ada sebelum mengurutkan
-    if 'exit_timestamp' in df.columns:
+    max_drawdown = 0
+    if 'exit_timestamp' in df.columns and df['exit_timestamp'].notna().all():
         df.sort_values(by='exit_timestamp', inplace=True)
         df['cumulative_pnl'] = df['pnl_percent'].cumsum()
         running_max = df['cumulative_pnl'].cummax()
         drawdown = running_max - df['cumulative_pnl']
         max_drawdown = drawdown.max() if not drawdown.empty else 0
-    else:
-        max_drawdown = 0 # Tidak bisa menghitung tanpa tanggal keluar
     
     avg_win = wins.mean() if not wins.empty else 0
     avg_loss = abs(losses.mean()) if not losses.empty else 0
     expectancy = ((win_rate / 100) * avg_win) - ((100 - win_rate) / 100 * avg_loss) if total_trades > 0 else 0
     
-    return {
-        "total_pnl_percent": pnl.sum(),
-        "total_trades": total_trades,
-        "winning_trades": winning_trades_count,
-        "losing_trades": losing_trades_count,
-        "win_rate_percent": win_rate,
-        "profit_factor": profit_factor,
-        "sharpe_ratio": sharpe_ratio,
-        "max_drawdown_percent": max_drawdown,
-        "expectancy_percent": expectancy
-    }
-
-# [ Di dashboard.py, ganti seluruh fungsi ini ]
-
+    return {"total_pnl_percent": pnl.sum(), "total_trades": total_trades,
+            "winning_trades": winning_trades_count, "losing_trades": losing_trades_count,
+            "win_rate_percent": win_rate, "profit_factor": profit_factor,
+            "sharpe_ratio": sharpe_ratio, "max_drawdown_percent": max_drawdown,
+            "expectancy_percent": expectancy}
+            
 @st.cache_data
 def generate_pdf_report(_df, _metrics, date_range):
     """
-    Versi 1.5: Membuat laporan PDF dengan menghapus kolom objek (trade_data)
-    sebelum operasi DataFrame untuk mencegah TypeError.
+    Versi 1.5: Membuat laporan PDF dengan menghapus kolom objek (trade_data).
     """
     pdf = FPDF()
     pdf.add_page()
@@ -158,38 +124,28 @@ def generate_pdf_report(_df, _metrics, date_range):
     pdf.cell(0, 10, "Apex Trading Bot - Performance Report", 0, 1, 'C')
     pdf.set_font("Arial", '', 10)
     
-    # Pastikan date_range adalah list/tuple dengan 2 elemen sebelum diakses
     if isinstance(date_range, (list, tuple)) and len(date_range) == 2:
         pdf.cell(0, 10, f"Periode: {date_range[0].strftime('%Y-%m-%d')} hingga {date_range[1].strftime('%Y-%m-%d')}", 0, 1, 'C')
     
     pdf.ln(5)
-    
     pdf.set_font("Arial", 'B', 12)
     pdf.cell(0, 10, "Key Performance Indicators", 0, 1)
     pdf.set_font("Arial", '', 10)
     
     profit_factor_display = f"{_metrics['profit_factor']:.2f}" if not math.isinf(_metrics['profit_factor']) else "∞ (No Losses)"
     
-    metrics_to_show = {
-        "Total Net P/L (%)": f"{_metrics['total_pnl_percent']:.2f}%",
-        "Win Rate (%)": f"{_metrics['win_rate_percent']:.2f}%",
-        "Profit Factor": profit_factor_display,
-        "Sharpe Ratio (Annualized)": f"{_metrics['sharpe_ratio']:.2f}",
-        "Maximum Drawdown (%)": f"{_metrics['max_drawdown_percent']:.2f}%",
-        "Total Trades": str(_metrics['total_trades'])
-    }
+    metrics_to_show = {"Total Net P/L (%)": f"{_metrics['total_pnl_percent']:.2f}%", "Win Rate (%)": f"{_metrics['win_rate_percent']:.2f}%",
+                       "Profit Factor": profit_factor_display, "Sharpe Ratio (Annualized)": f"{_metrics['sharpe_ratio']:.2f}",
+                       "Maximum Drawdown (%)": f"{_metrics['max_drawdown_percent']:.2f}%", "Total Trades": str(_metrics['total_trades'])}
     for key, value in metrics_to_show.items():
-        pdf.cell(95, 7, f"  {key}:", 'B', 0)
-        pdf.cell(95, 7, value, 'B', 1, 'R')
+        pdf.cell(95, 7, f"  {key}:", 'B', 0); pdf.cell(95, 7, value, 'B', 1, 'R')
     
     pdf.ln(5)
     pdf.set_font("Arial", 'B', 12)
     pdf.cell(0, 10, "Top 5 & Bottom 5 Trades", 0, 1)
     pdf.set_font("Arial", 'B', 8)
-    pdf.cell(40, 6, 'Pair', 1, 0, 'C')
-    pdf.cell(40, 6, 'Strategy', 1, 0, 'C')
-    pdf.cell(40, 6, 'Entry Date', 1, 0, 'C')
-    pdf.cell(30, 6, 'P/L (%)', 1, 1, 'C')
+    pdf.cell(40, 6, 'Pair', 1, 0, 'C'); pdf.cell(40, 6, 'Strategy', 1, 0, 'C');
+    pdf.cell(40, 6, 'Entry Date', 1, 0, 'C'); pdf.cell(30, 6, 'P/L (%)', 1, 1, 'C')
     pdf.set_font("Arial", '', 8)
 
     closed_trades = _df[(_df['status'] == 'closed')].copy()
@@ -197,20 +153,13 @@ def generate_pdf_report(_df, _metrics, date_range):
     closed_trades.dropna(subset=['pnl_percent', 'entry_timestamp'], inplace=True)
 
     if not closed_trades.empty:
-        # --- [PERBAIKAN KUNCI DI SINI] ---
-        # Hapus kolom 'trade_data' jika ada, karena mengandung objek yang tidak bisa dibandingkan
         if 'trade_data' in closed_trades.columns:
             closed_trades_for_display = closed_trades.drop(columns=['trade_data'])
         else:
             closed_trades_for_display = closed_trades
 
         closed_trades_for_display.sort_values('pnl_percent', ascending=False, inplace=True)
-        
-        trades_to_display = pd.concat([
-            closed_trades_for_display.head(5), 
-            closed_trades_for_display.tail(5)
-        ]).drop_duplicates()
-        # --- [AKHIR PERBAIKAN] ---
+        trades_to_display = pd.concat([closed_trades_for_display.head(5), closed_trades_for_display.tail(5)]).drop_duplicates()
         
         for _, row in trades_to_display.iterrows():
             pdf.cell(40, 5, str(row.get('pair', 'N/A')), 1)
@@ -226,15 +175,13 @@ def generate_pdf_report(_df, _metrics, date_range):
     
     return pdf.output(dest='S').encode('latin-1')
 
-
 # --- [4] TAMPILAN UTAMA DASHBOARD ---
 st.title("Apex Trading Analytics Terminal")
 
-# [PERBAIKAN] Panggil fungsi yang sesuai dengan strategi cache yang benar
 signals_df = get_live_signals("signals") 
 master_df = st.cache_data(get_trades_data, ttl=60)("trades")
 
-# --- Live Signal Radar & Analysis ---
+# ... (Blok Live Signal Radar tetap sama) ...
 st.header("📡 Live Signal Radar")
 if not signals_df.empty:
     cols = st.columns([3, 2])
@@ -253,14 +200,14 @@ else:
     st.info("Saat ini tidak ada sinyal trading aktif yang terdeteksi. Bot sedang memantau pasar...")
 st.markdown("---")
 
-# --- Expander untuk Filter & Simulasi ---
+# ... (Blok Expander & Filter tetap sama) ...
 with st.expander("⚙️ Filter Analisis & Opsi Laporan", expanded=True):
-    if not master_df.empty:
-        col1, col2, col3 = st.columns(3)
-        with col1:
-            min_date = master_df['entry_timestamp'].min().date()
-            max_date = datetime.now().date()
-            date_range = st.date_input("Pilih Rentang Waktu", value=(min_date, max_date), min_value=min_date, max_value=max_date)
+    if not master_df.empty and 'entry_timestamp' in master_df.columns:
+        min_date = master_df['entry_timestamp'].min().date()
+        max_date = datetime.now().date()
+        date_range = st.date_input("Pilih Rentang Waktu", value=(min_date, max_date), min_value=min_date, max_value=max_date)
+        
+        col2, col3 = st.columns(2)
         with col2:
             all_pairs = sorted(master_df['pair'].unique())
             selected_pairs = st.multiselect("Pilih Aset", all_pairs, default=all_pairs)
@@ -281,10 +228,10 @@ with st.expander("⚙️ Filter Analisis & Opsi Laporan", expanded=True):
         else:
             filtered_df = pd.DataFrame()
     else:
-        st.info("Filter dan simulasi akan aktif setelah ada data transaksi.")
+        st.info("Filter akan aktif setelah ada data transaksi.")
         filtered_df = pd.DataFrame()
 
-# --- Tampilan Utama (setelah expander) ---
+# ... (Blok KPI tetap sama) ...
 st.header("Key Performance Indicators (KPIs)")
 if not filtered_df.empty:
     metrics = calculate_advanced_metrics(filtered_df)
@@ -310,15 +257,19 @@ else:
 st.markdown("---")
 st.header("Visualisasi Performa")
 
-# --- Heatmap Kalender (Versi Plotly) ---
+# --- Heatmap Kalender (dengan perbaikan definitif) ---
 st.subheader("🗓️ Heatmap Kalender P/L Harian")
 if not filtered_df.empty:
-    # [PERBAIKAN] Saring data tidak valid sebelum membuat heatmap
-    closed_trades_cal = filtered_df[
-        (filtered_df['status'] == 'closed') & 
-        (filtered_df['pnl_percent'].notna()) &
-        (filtered_df['exit_timestamp'].notna())
-    ].copy()
+    # --- [PERBAIKAN DEFINITIF DI SINI] ---
+    df_for_cal = filtered_df.copy()
+    df_for_cal['pnl_percent'] = pd.to_numeric(df_for_cal['pnl_percent'], errors='coerce')
+    
+    closed_trades_cal = df_for_cal[
+        (df_for_cal['status'] == 'closed') & 
+        (df_for_cal['pnl_percent'].notna()) &
+        (df_for_cal['exit_timestamp'].notna())
+    ]
+    # --- [AKHIR PERBAIKAN] ---
     
     if not closed_trades_cal.empty:
         daily_pnl = closed_trades_cal.set_index('exit_timestamp')['pnl_percent'].resample('D').sum()
@@ -354,7 +305,11 @@ else:
 tab1, tab2, tab3 = st.tabs(["📈 Kurva Ekuitas", "📊 Analisis per Aset", "📜 Detail Transaksi"])
 with tab1:
     if not filtered_df.empty:
-        equity_df = filtered_df[(filtered_df['status'] == 'closed') & (filtered_df['pnl_percent'].notna())].copy()
+        # Terapkan pembersihan data yang sama di sini untuk konsistensi
+        equity_df = filtered_df[(filtered_df['status'] == 'closed')].copy()
+        equity_df['pnl_percent'] = pd.to_numeric(equity_df['pnl_percent'], errors='coerce')
+        equity_df.dropna(subset=['pnl_percent', 'exit_timestamp'], inplace=True)
+
         if not equity_df.empty:
             equity_df.sort_values(by='exit_timestamp', inplace=True)
             equity_df['cumulative_pnl'] = equity_df['pnl_percent'].cumsum()
@@ -371,7 +326,11 @@ with tab1:
 
 with tab2:
     if not filtered_df.empty:
-        pnl_by_pair_df = filtered_df[(filtered_df['status'] == 'closed') & (filtered_df['pnl_percent'].notna())].copy()
+        # Terapkan pembersihan data yang sama di sini
+        pnl_by_pair_df = filtered_df[(filtered_df['status'] == 'closed')].copy()
+        pnl_by_pair_df['pnl_percent'] = pd.to_numeric(pnl_by_pair_df['pnl_percent'], errors='coerce')
+        pnl_by_pair_df.dropna(subset=['pnl_percent'], inplace=True)
+        
         if not pnl_by_pair_df.empty:
             pnl_by_pair = pnl_by_pair_df.groupby('pair')['pnl_percent'].sum().sort_values(ascending=False)
             fig_pair_pnl = px.bar(pnl_by_pair, title="Total P/L (%) per Aset", labels={'value': 'Total P/L (%)', 'pair': 'Aset'})
