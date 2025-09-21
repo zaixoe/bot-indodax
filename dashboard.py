@@ -1,9 +1,9 @@
 # ==============================================================================
-#           APEX QUANTUM ANALYTICS TERMINAL (AQAT) - v1.7 (UI/UX Refined) 
+#           APEX QUANTUM ANALYTICS TERMINAL (AQAT) - v1.7 (UI/UX Refined)
 # ==============================================================================
 # SEBUAH DASHBOARD STREAMLIT UNTUK ANALISIS PERFORMA TRADING BOT TINGKAT LANJUT
 # VERSI INI MEMINDAHKAN TOMBOL UNDUH PDF KE HALAMAN UTAMA UNTUK INTUITIVITAS
-# =============================================================================
+# ==============================================================================
 
 import streamlit as st
 import requests
@@ -41,7 +41,7 @@ def get_live_signals(endpoint):
     except requests.exceptions.RequestException:
         return pd.DataFrame()
 
-@st.cache_data(ttl=15) # Cache selama 15 detik
+@st.cache_data(ttl=15)
 def get_trades_data(endpoint):
     """Fungsi untuk mengambil data historis trade."""
     try:
@@ -56,8 +56,7 @@ def get_trades_data(endpoint):
             df['exit_timestamp'] = pd.to_datetime(df['exit_timestamp'], errors='coerce').dt.tz_localize(None)
         return df
     except requests.exceptions.RequestException as e:
-        st.sidebar.error(f"Koneksi API Gagal: {e}")
-        return pd.DataFrame()
+        raise e # Lempar kembali error agar bisa ditangani di luar
 
 @st.cache_data
 def calculate_advanced_metrics(_df):
@@ -188,8 +187,14 @@ def generate_pdf_report(_df, _metrics, date_range):
 # --- [4] TAMPILAN UTAMA DASHBOARD ---
 st.title("Apex Trading Analytics Terminal")
 
-signals_df = get_live_signals("signals") 
-master_df = st.cache_data(get_trades_data, ttl=60)("trades")
+try:
+    signals_df = get_live_signals("signals") 
+    master_df = get_trades_data("trades")
+except requests.exceptions.RequestException as e:
+    st.error(f"🚨 Gagal terhubung ke API Bot: {e}. Pastikan bot sedang berjalan dan BASE_URL sudah benar.")
+    # Buat DataFrame kosong agar sisa aplikasi tidak crash
+    signals_df = pd.DataFrame()
+    master_df = pd.DataFrame()
 
 st.header("📡 Live Signal Radar")
 if not signals_df.empty:
@@ -203,7 +208,8 @@ if not signals_df.empty:
         kpi_cols[0].metric("Strategi", signal_data['strategy'].upper())
         kpi_cols[1].metric("ADX (M15)", f"{signal_data['adx']:.2f}")
         kpi_cols[0].metric("Harga vs SMA 200 (H4)", f"{signal_data.get('price_vs_sma_h4_percent', 0):.2f}%")
-        status_color = "🟢 Aktif" if signal_data.get('golden_cross_m15_active', False) else "🔴 Tidak Aktif"
+        is_active = str(signal_data.get('golden_cross_m15_active', 'False')) == 'True'
+        status_color = "🟢 Aktif" if is_active else "🔴 Tidak Aktif"
         kpi_cols[1].markdown(f"**Golden Cross (M15):** {status_color}")
 else:
     st.info("Saat ini tidak ada sinyal trading aktif yang terdeteksi. Bot sedang memantau pasar...")
