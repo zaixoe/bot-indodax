@@ -27,8 +27,7 @@ HEADERS = {"X-API-Key": API_KEY}
 
 # --- [3] FUNGSI-FUNGSI PENGOLAHAN DATA & ANALITIK ---
 
-# [PERBAIKAN] Mengurangi TTL agar data lebih fresh
-@st.cache_data(ttl=10)
+@st.cache_data(ttl=10) # Mengurangi TTL agar data lebih fresh
 def get_trades_data(endpoint):
     """Fungsi untuk mengambil data historis trade."""
     try:
@@ -45,8 +44,6 @@ def get_trades_data(endpoint):
         st.error(f"🚨 Gagal terhubung ke API Bot: {e}. Pastikan bot berjalan dan BASE_URL sudah benar.")
         return pd.DataFrame()
 
-# Fungsi calculate_advanced_metrics dan generate_pdf_report tetap sama
-# (Tidak perlu diubah)
 @st.cache_data
 def calculate_advanced_metrics(_df):
     if _df.empty or 'status' not in _df.columns or 'pnl_percent' not in _df.columns:
@@ -99,7 +96,7 @@ def calculate_advanced_metrics(_df):
             "win_rate_percent": win_rate, "profit_factor": profit_factor,
             "sharpe_ratio": sharpe_ratio, "max_drawdown_percent": max_drawdown,
             "expectancy_percent": expectancy}
-            
+
 @st.cache_data
 def generate_pdf_report(_df, _metrics, date_range):
     pdf = FPDF()
@@ -112,7 +109,6 @@ def generate_pdf_report(_df, _metrics, date_range):
         pdf.cell(0, 10, f"Periode: {date_range[0].strftime('%Y-%m-%d')} hingga {date_range[1].strftime('%Y-%m-%d')}", 0, 1, 'C')
     
     pdf.ln(5)
-    # ... (sisa fungsi PDF tetap sama) ...
     pdf.set_font("Arial", 'B', 12)
     pdf.cell(0, 10, "Key Performance Indicators", 0, 1)
     pdf.set_font("Arial", '', 10)
@@ -126,13 +122,43 @@ def generate_pdf_report(_df, _metrics, date_range):
         pdf.cell(95, 7, f"  {key}:", 'B', 0); pdf.cell(95, 7, value, 'B', 1, 'R')
     
     pdf.ln(5)
-    # ... (sisa fungsi PDF tetap sama) ...
+    pdf.set_font("Arial", 'B', 12)
+    pdf.cell(0, 10, "Top 5 & Bottom 5 Trades", 0, 1)
+    pdf.set_font("Arial", 'B', 8)
+    pdf.cell(40, 6, 'Pair', 1, 0, 'C'); pdf.cell(40, 6, 'Strategy', 1, 0, 'C');
+    pdf.cell(40, 6, 'Entry Date', 1, 0, 'C'); pdf.cell(30, 6, 'P/L (%)', 1, 1, 'C')
+    pdf.set_font("Arial", '', 8)
+
+    closed_trades = _df[(_df['status'] == 'closed')].copy()
+    closed_trades['pnl_percent'] = pd.to_numeric(closed_trades['pnl_percent'], errors='coerce')
+    closed_trades.dropna(subset=['pnl_percent', 'entry_timestamp'], inplace=True)
+
+    if not closed_trades.empty:
+        if 'trade_data' in closed_trades.columns:
+            closed_trades_for_display = closed_trades.drop(columns=['trade_data'])
+        else:
+            closed_trades_for_display = closed_trades
+
+        closed_trades_for_display.sort_values('pnl_percent', ascending=False, inplace=True)
+        trades_to_display = pd.concat([closed_trades_for_display.head(5), closed_trades_for_display.tail(5)]).drop_duplicates()
+        
+        for _, row in trades_to_display.iterrows():
+            pdf.cell(40, 5, str(row.get('pair', 'N/A')), 1)
+            pdf.cell(40, 5, str(row.get('strategy_type', 'N/A')), 1)
+            pdf.cell(40, 5, row['entry_timestamp'].strftime('%Y-%m-%d'), 1)
+            pdf.cell(30, 5, f"{row['pnl_percent']:.2f}%", 1, 1, 'R')
+    else:
+        pdf.cell(0, 5, "Tidak ada data trade yang ditutup untuk ditampilkan.", 1, 1, 'C')
+
+    pdf.ln(5)
+    pdf.set_font("Arial", 'I', 8)
+    pdf.cell(0, 10, "This report is generated for analytical purposes and does not constitute investment advice.", 0, 1, 'C')
+    
     return pdf.output(dest='S').encode('latin-1')
 
 # --- [4] TAMPILAN UTAMA DASHBOARD ---
 st.title("Apex Trading Analytics Terminal")
 
-# Tombol refresh manual untuk menghapus cache
 if st.button("🔄 Refresh Data Sekarang"):
     st.cache_data.clear()
 
@@ -143,8 +169,9 @@ st.header("🛡️ Posisi Terbuka Saat Ini")
 if not master_df.empty:
     open_positions_df = master_df[master_df['status'] == 'open'].copy()
     if not open_positions_df.empty:
-        # Tampilkan kolom yang paling relevan untuk posisi terbuka
         display_cols = ['pair', 'entry_timestamp', 'entry_price', 'quantity', 'modal', 'strategy_type']
+        # Pastikan semua kolom yang dibutuhkan ada
+        display_cols = [col for col in display_cols if col in open_positions_df.columns]
         st.dataframe(open_positions_df[display_cols], use_container_width=True)
     else:
         st.info("Tidak ada posisi yang sedang terbuka saat ini.")
@@ -159,7 +186,6 @@ st.caption("Metrik di bawah ini hanya dihitung dari transaksi yang sudah ditutup
 
 with st.expander("⚙️ Filter Analisis & Opsi Laporan", expanded=True):
     if not master_df.empty and 'entry_timestamp' in master_df.columns:
-        # Filter hanya berdasarkan data yang sudah ditutup
         closed_df_for_filter = master_df[master_df['status'] == 'closed']
         
         if not closed_df_for_filter.empty:
@@ -179,7 +205,6 @@ with st.expander("⚙️ Filter Analisis & Opsi Laporan", expanded=True):
                 start_date = datetime.combine(date_range[0], datetime.min.time())
                 end_date = datetime.combine(date_range[1], datetime.max.time())
                 
-                # Aplikasikan filter ke dataframe yang sudah difilter 'closed'
                 filtered_df = closed_df_for_filter[
                     (closed_df_for_filter['entry_timestamp'] >= start_date) & 
                     (closed_df_for_filter['entry_timestamp'] <= end_date) &
@@ -195,14 +220,12 @@ with st.expander("⚙️ Filter Analisis & Opsi Laporan", expanded=True):
         st.info("Filter akan aktif setelah ada data transaksi.")
         filtered_df = pd.DataFrame()
 
-# KPI, Visualisasi, dan Detail Transaksi sekarang menggunakan `filtered_df` yang sudah pasti `closed`
 if not filtered_df.empty:
-    metrics = calculate_advanced_metrics(filtered_df) # Fungsi ini sudah benar karena menerima data yg sudah difilter
+    metrics = calculate_advanced_metrics(filtered_df)
     
     st.subheader("Key Performance Indicators (KPIs)")
     cols = st.columns(4)
     cols[0].metric("Total Net P/L (%)", f"{metrics['total_pnl_percent']:.2f}%")
-    # ... (sisa metrik tetap sama) ...
     cols[1].metric("Win Rate", f"{metrics['win_rate_percent']:.1f}%")
     cols[2].metric("Profit Factor", f"{metrics['profit_factor']:.2f}" if not math.isinf(metrics['profit_factor']) else "∞")
     cols[3].metric("Sharpe Ratio (Ann.)", f"{metrics['sharpe_ratio']:.2f}")
@@ -225,21 +248,24 @@ if not filtered_df.empty:
     
     tab1, tab2, tab3 = st.tabs(["📈 Kurva Ekuitas", "📊 Analisis per Aset", "📜 Seluruh Riwayat Transaksi"])
     with tab1:
-        # Kurva Ekuitas (logika tetap sama, karena hanya relevan untuk trade yg sudah ditutup)
         equity_df = filtered_df.copy()
         equity_df.sort_values(by='exit_timestamp', inplace=True)
         equity_df['cumulative_pnl'] = equity_df['pnl_percent'].cumsum()
-        # ... (sisa kode chart tetap sama) ...
-        fig = px.line(equity_df, x='exit_timestamp', y='cumulative_pnl', title='Kurva Pertumbuhan Ekuitas')
+        equity_df['running_max'] = equity_df['cumulative_pnl'].cummax()
+        fig = go.Figure()
+        fig.add_trace(go.Scatter(x=equity_df['exit_timestamp'], y=equity_df['running_max'], fill=None, mode='lines', line_color='rgba(0,0,0,0)', showlegend=False))
+        fig.add_trace(go.Scatter(x=equity_df['exit_timestamp'], y=equity_df['cumulative_pnl'], fill='tonexty', mode='lines', line_color='cyan', name='Equity Curve'))
+        fig.update_layout(title_text='Kurva Pertumbuhan Ekuitas dengan Periode Drawdown (Area Abu-abu)', xaxis_title='Tanggal', yaxis_title='Total P/L Kumulatif (%)', showlegend=False)
         st.plotly_chart(fig, use_container_width=True)
 
     with tab2:
-        # Analisis per Aset (logika tetap sama)
         pnl_by_pair = filtered_df.groupby('pair')['pnl_percent'].sum().sort_values(ascending=False)
-        fig_pair_pnl = px.bar(pnl_by_pair, title="Total P/L (%) per Aset")
+        fig_pair_pnl = px.bar(pnl_by_pair, title="Total P/L (%) per Aset", labels={'value': 'Total P/L (%)', 'pair': 'Aset'})
         st.plotly_chart(fig_pair_pnl, use_container_width=True)
         
     with tab3:
-        # [PERBAIKAN] Tab ini sekarang menampilkan SEMUA transaksi (terbuka dan tertutup)
         st.info("Tabel di bawah ini menampilkan seluruh riwayat transaksi, termasuk yang masih terbuka.")
-        st.dataframe(master_df, use_container_width=True) # Gunakan master_df, 
+        st.dataframe(master_df.sort_values(by='id', ascending=False), use_container_width=True)
+        
+else:
+    st.info("Metrik akan ditampilkan di sini setelah ada data transaksi yang ditutup yang cocok dengan filter.")
