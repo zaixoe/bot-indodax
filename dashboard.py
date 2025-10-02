@@ -41,7 +41,7 @@ def get_live_signals(endpoint):
     except requests.exceptions.RequestException:
         return pd.DataFrame()
 
-@st.cache_data(ttl=15)
+@st.cache_data(ttl=120)
 def get_trades_data(endpoint):
     """Fungsi untuk mengambil data historis trade."""
     try:
