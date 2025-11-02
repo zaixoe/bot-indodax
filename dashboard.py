@@ -145,10 +145,11 @@ else:
 
 # Filter lebih lanjut
 with st.expander("⚙️ Filter Lanjutan & Opsi", expanded=False):
-    if not df_mode_filtered.empty and 'entry_timestamp' in df_mode_filtered.columns:
+    # [PERBAIKAN KUNCI] Tambahkan .notna().any() untuk memastikan ada setidaknya satu tanggal valid
+    if not df_mode_filtered.empty and 'entry_timestamp' in df_mode_filtered.columns and df_mode_filtered['entry_timestamp'].notna().any():
         min_date = df_mode_filtered['entry_timestamp'].min().date()
         max_date = datetime.now().date()
-        date_range = st.date_input("Pilih Rentang Waktu", value=(min_date, max_date), min_value=min_date, max_date=max_date)
+        date_range = st.date_input("Pilih Rentang Waktu", value=(min_date, max_date), min_value=min_date, max_value=max_date)
         
         col1, col2 = st.columns(2)
         all_pairs = sorted(df_mode_filtered['pair'].unique())
@@ -168,10 +169,11 @@ with st.expander("⚙️ Filter Lanjutan & Opsi", expanded=False):
                 (df_mode_filtered['strategy_type'].isin(selected_strategies))
             ].copy()
         else:
+            # Jika rentang tanggal tidak valid, kembalikan df kosong
             filtered_df = pd.DataFrame()
     else:
         st.write("Filter akan aktif setelah ada data transaksi.")
-        filtered_df = pd.DataFrame()
+        filtered_df = pd.DataFrame() # Pastikan filtered_df selalu terdefinisi
 
 # Hitung metrik dari data yang sudah difilter
 metrics = calculate_advanced_metrics(filtered_df)
