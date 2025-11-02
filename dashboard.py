@@ -175,7 +175,12 @@ with st.expander("⚙️ Filter Lanjutan & Opsi", expanded=False):
         st.write("Filter akan aktif setelah ada data transaksi.")
         filtered_df = pd.DataFrame() # Pastikan filtered_df selalu terdefinisi
 
-# Hitung metrik dari data yang sudah difilter
+# [VERSI BENAR DAN RAPI]
+# Sekarang, kita bersihkan 'pnl_percent' dari DataFrame hasil filter.
+if not filtered_df.empty and 'pnl_percent' in filtered_df.columns:
+    filtered_df['pnl_percent'] = pd.to_numeric(filtered_df['pnl_percent'], errors='coerce')
+
+# Hitung metrik dari data yang sudah difilter (yang mungkin pnl_percent-nya sudah dibersihkan)
 metrics = calculate_advanced_metrics(filtered_df)
 
 # --- TABS UTAMA ---
