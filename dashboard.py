@@ -215,6 +215,11 @@ with tab_perf:
         sankey_df = filtered_df[filtered_df['status'] == 'closed'].copy()
         sankey_df['mode'] = np.where(sankey_df['is_hunter_mode'], 'Hunter', 'Normal')
         
+        # [PERBAIKAN KUNCI] Pastikan pnl_percent adalah tipe data numerik yang bersih
+        # errors='coerce' akan mengubah data non-numerik menjadi NaN (kosong)
+        # .fillna(0) akan mengubah NaN menjadi 0
+        sankey_df['pnl_percent'] = pd.to_numeric(sankey_df['pnl_percent'], errors='coerce').fillna(0)
+        
         if not sankey_df.empty:
             all_nodes = ['Profit', 'Loss'] + sankey_df['mode'].unique().tolist() + sankey_df['strategy_type'].unique().tolist()
             node_map = {name: i for i, name in enumerate(all_nodes)}
