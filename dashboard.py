@@ -183,14 +183,88 @@ if not filtered_df.empty and 'pnl_percent' in filtered_df.columns:
 # Hitung metrik dari data yang sudah difilter (yang mungkin pnl_percent-nya sudah dibersihkan)
 metrics = calculate_advanced_metrics(filtered_df)
 
+def render_gauge(value, title, min_val=0, max_val=100):
+    """Membuat indikator Gauge sederhana menggunakan Plotly"""
+    fig = go.Figure(go.Indicator(
+        mode = "gauge+number",
+        value = value,
+        domain = {'x': [0, 1], 'y': [0, 1]},
+        title = {'text': title},
+        gauge = {'axis': {'range': [None, max_val]},
+                 'bar': {'color': "#00ff00" if value > 50 else "#ff0000"},
+                 'steps': [
+                     {'range': [0, 50], 'color': "lightgray"},
+                     {'range': [50, 100], 'color': "gray"}]}))
+    fig.update_layout(height=150, margin=dict(l=10, r=10, t=30, b=10))
+    return fig
+
 # --- TABS UTAMA ---
-tab_kpi, tab_perf, tab_sim, tab_data, tab_signals = st.tabs([
-    "📊 Key Performance Indicators",
-    "📈 Analisis Performa",
-    "🔮 Simulasi Monte Carlo",
-    "📜 Detail Transaksi",
-    "📡 Radar Sinyal Live"
+tab_live, tab_kpi, tab_perf, tab_sim, tab_signals, tab_logs = st.tabs([
+    "⚡ Live Operations",
+    "📊 KPIs",
+    "📈 Performa",
+    "🔮 Monte Carlo",
+    "📡 Radar Sinyal",
+    "🖥️ System Logs"
 ])
+
+with tab_live:
+    st.header("⚡ Pusat Komando Operasional")
+    
+    # 1. Status Bot (Heartbeat)
+    # Anggap kita punya endpoint /api/v1/dashboard/status
+    status_data = get_data_from_bot("status") # Anda perlu buat endpoint ini di Flask
+    
+    if not status_data.empty:
+        # Mengambil row pertama sebagai dict
+        status = status_data.iloc[0].to_dict() if len(status_data) > 0 else {}
+        
+        col_h1, col_h2, col_h3, col_h4 = st.columns(4)
+        
+        # Indikator Hidup/Mati
+        last_update = pd.to_datetime(status.get('timestamp', datetime.now()))
+        seconds_ago = (datetime.now() - last_update).total_seconds()
+        is_online = seconds_ago < 300 # Anggap online jika update < 5 menit lalu
+        
+        state_color = "🟢 ONLINE" if is_online else "🔴 OFFLINE"
+        col_h1.metric("Status Bot", state_color, f"{seconds_ago:.0f}s ago")
+        col_h2.metric("Market Regime", status.get('market_regime', 'UNKNOWN'))
+        col_h3.metric("Total Equity", f"Rp {status.get('total_equity', 0):,.0f}")
+        col_h4.metric("Risk Factor", f"{status.get('risk_factor', 1.0):.2f}x")
+    
+    st.markdown("---")
+
+    # 2. Monitor Posisi Terbuka (Warden View)
+    st.subheader("🛡️ Posisi Terbuka (Real-Time)")
+    
+    # Ambil data trade yang statusnya 'open'
+    open_trades = master_df[master_df['status'] == 'open'].copy()
+    
+    if not open_trades.empty:
+        # Hitung PnL Estimasi (Jika API mengirim harga terkini)
+        # Jika tidak, kita hanya tampilkan data statis
+        cols = st.columns(len(open_trades)) if len(open_trades) < 4 else st.columns(3)
+        
+        for idx, (_, row) in enumerate(open_trades.iterrows()):
+            # Gunakan kolom secara bergantian
+            with cols[idx % 3]:
+                # Card Style
+                st.markdown(f"""
+                <div style="border:1px solid #444; padding: 15px; border-radius: 10px; margin-bottom: 10px;">
+                    <h3 style="margin:0; color: #4da6ff;">{row['pair'].upper()}</h3>
+                    <p style="margin:0; font-size: 0.8em;">Strategy: {row.get('strategy_type', 'N/A')}</p>
+                    <hr style="margin: 5px 0;">
+                    <p>Entry: <b>{format_metric(row['entry_price'])}</b></p>
+                    <p>Modal: Rp {format_metric(row['modal'], precision=0)}</p>
+                    <p>Time: {row['entry_timestamp']}</p>
+                </div>
+                """, unsafe_allow_html=True)
+                
+                if st.button(f"🚨 Panic Sell {row['pair']}", key=f"panic_{row['id']}"):
+                    # Tambahkan logika pemanggilan API untuk jual paksa di sini
+                    st.warning("Fitur Panic Sell perlu dihubungkan ke API endpoint /sell_order")
+    else:
+        st.success("Tidak ada posisi terbuka. Bot sedang memantau pasar (Sniping Mode).")
 
 with tab_kpi:
     st.header("Metrik Kinerja Utama")
@@ -213,6 +287,22 @@ with tab_kpi:
 
 with tab_perf:
     st.header("Visualisasi Performa Lanjutan")
+    
+    st.subheader("🧬 Kinerja Genom Strategi")
+    if not filtered_df.empty:
+        strategy_perf = filtered_df.groupby('strategy_type')['pnl_percent'].sum().reset_index()
+        strategy_perf = strategy_perf.sort_values('pnl_percent', ascending=False)
+        
+        fig_strat = px.bar(
+            strategy_perf, 
+            x='pnl_percent', 
+            y='strategy_type',
+            orientation='h',
+            title="Total PnL per Strategi",
+            color='pnl_percent',
+            color_continuous_scale=['red', 'yellow', 'green']
+        )
+        st.plotly_chart(fig_strat, use_container_width=True)
     
     # [FITUR BARU] Analisis Performa Tersegmentasi
     st.subheader("🔬 Analisis Performa Tersegmentasi (Sankey Diagram)")
