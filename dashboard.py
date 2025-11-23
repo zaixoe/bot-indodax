@@ -199,13 +199,14 @@ def render_gauge(value, title, min_val=0, max_val=100):
     return fig
 
 # --- TABS UTAMA ---
-tab_live, tab_kpi, tab_perf, tab_sim, tab_signals, tab_logs = st.tabs([
-    "⚡ Live Operations",
-    "📊 KPIs",
-    "📈 Performa",
-    "🔮 Monte Carlo",
-    "📡 Radar Sinyal",
-    "🖥️ System Logs"
+tab_live, tab_kpi, tab_perf, tab_sim, tab_data, tab_signals, tab_logs = st.tabs([
+    "⚡ Live Operations",   # -> tab_live
+    "📊 KPIs",             # -> tab_kpi
+    "📈 Performa",         # -> tab_perf
+    "🔮 Monte Carlo",      # -> tab_sim
+    "📜 Detail Transaksi", # -> tab_data (INI YANG SEBELUMNYA HILANG/ERROR)
+    "📡 Radar Sinyal",     # -> tab_signals
+    "🖥️ System Logs"       # -> tab_logs
 ])
 
 with tab_live:
@@ -401,6 +402,35 @@ with tab_sim:
                     res_cols[1].metric("Hasil Terbaik", f"{final_equities.max():.2f}")
                     res_cols[2].metric("Hasil Terburuk", f"{final_equities.min():.2f}")
                     res_cols[3].metric("Probabilitas Profit", f"{prob_profit:.1f}%")
+
+with tab_logs:
+    st.header("🖥️ Log Aktivitas Bot (Live Stream)")
+    
+    # Tombol refresh manual untuk log
+    if st.button("🔄 Refresh Logs"):
+        st.cache_data.clear()
+        
+    # Ambil data log (Anggap endpoint ini mengembalikan list string)
+    # Format data dari API: {"logs": ["line 1", "line 2", ...]}
+    try:
+        response = requests.get(f"{BASE_URL}/logs", headers=HEADERS, timeout=5)
+        if response.status_code == 200:
+            log_lines = response.json().get('logs', [])
+            
+            # Filter Error/Warning agar mudah dilihat
+            error_logs = [l for l in log_lines if "ERROR" in l or "CRITICAL" in l]
+            if error_logs:
+                st.error(f"Terdeteksi {len(error_logs)} Masalah Kritis!")
+                with st.expander("Lihat Error Saja", expanded=True):
+                    st.code("\n".join(error_logs), language="text")
+            
+            # Tampilkan semua log
+            log_text = "\n".join(log_lines)
+            st.text_area("Log Lengkap", value=log_text, height=600, disabled=True)
+        else:
+            st.warning("Gagal mengambil log dari server.")
+    except Exception as e:
+        st.error(f"Koneksi log error: {e}")
 
 with tab_data:
     st.header("📜 Detail Transaksi")
