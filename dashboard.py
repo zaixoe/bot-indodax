@@ -303,24 +303,21 @@ with tab_kpi:
         st.info("Metrik akan ditampilkan setelah ada data yang cocok dengan filter.")
 
 with tab_perf:
-    st.subheader("📈 Kurva Pertumbuhan Profit (Realized)")
-    pnl_data = get_pnl_curve_data()
-    
-    # --- [PERBAIKAN] Cek apakah DataFrame kosong atau tidak punya kolom yang diharapkan ---
-    if not pnl_data.empty and 'date' in pnl_data.columns and 'cumulative_profit' in pnl_data.columns:
-        fig_equity = px.area(
-            pnl_data, 
-            x='date', 
-            y='cumulative_profit',
-            title="Akumulasi Profit Bersih (Realized PnL)",
-            labels={'cumulative_profit': 'Total Profit (IDR)', 'date': 'Tanggal'},
-            color_discrete_sequence=['#00CC96']
+    st.subheader("🧬 Kinerja Genom Strategi")
+    if not filtered_df.empty:
+        strategy_perf = filtered_df.groupby('strategy_type')['pnl_percent'].sum().reset_index()
+        strategy_perf = strategy_perf.sort_values('pnl_percent', ascending=False)
+        
+        fig_strat = px.bar(
+            strategy_perf, 
+            x='pnl_percent', 
+            y='strategy_type',
+            orientation='h',
+            title="Total PnL per Strategi",
+            color='pnl_percent',
+            color_continuous_scale=['red', 'yellow', 'green']
         )
-        fig_equity.update_layout(yaxis_tickformat=",.0f")
-        st.plotly_chart(fig_equity, use_container_width=True)
-    else:
-        # Tampilkan pesan ramah jika data belum ada
-        st.info("ℹ️ Belum ada data transaksi yang tercatat di Ledger baru. Lakukan trading untuk melihat grafik ini.")
+        st.plotly_chart(fig_strat, use_container_width=True)
     
     # [FITUR BARU] Analisis Performa Tersegmentasi
     st.subheader("🔬 Analisis Performa Tersegmentasi (Sankey Diagram)")
