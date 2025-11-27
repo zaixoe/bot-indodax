@@ -353,7 +353,7 @@ with tab_perf:
         rolling_df.sort_values(by='exit_timestamp', inplace=True)
         if len(rolling_df) > 20:
             rolling_df['win'] = (rolling_df['pnl_percent'] > 0).astype(int)
-            rolling_df['rolling_win_rate'] = rolling_df['win'].rolling(window=20).mean() * 100
+            rolling_df['rolling_win_rate'] = rolling_df['win'].rolling(window=20, min_periods=1).mean() * 100
             
             fig_rolling = px.line(rolling_df, x='exit_timestamp', y='rolling_win_rate', 
                                   title="Win Rate Bergulir (Jendela 20 Trade)",
