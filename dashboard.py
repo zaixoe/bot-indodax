@@ -56,6 +56,22 @@ def get_data_from_bot(endpoint):
         st.error(f"Terjadi error saat memproses data dari endpoint {endpoint}: {e}")
         return pd.DataFrame()
 
+@st.cache_data(ttl=300) # Cache 5 menit untuk data berat
+def get_ledger_data():
+    """Mengambil data buku besar transaksi lengkap."""
+    df = get_data_from_bot("ledger?limit=5000") # Panggil endpoint baru
+    if not df.empty:
+        # Konversi numerik
+        cols_num = ['quantity', 'price', 'total_value', 'pnl_realized', 'pnl_percent']
+        for col in cols_num:
+            df[col] = pd.to_numeric(df[col], errors='coerce').fillna(0)
+    return df
+
+@st.cache_data(ttl=3600) # Cache 1 jam untuk kurva harian
+def get_pnl_curve_data():
+    """Mengambil data kurva pertumbuhan ekuitas harian."""
+    return get_data_from_bot("pnl_curve?days=90")
+
 @st.cache_data
 def calculate_advanced_metrics(_df):
     """[v2.0] Menghitung metrik performa tingkat lanjut, termasuk analisis streak."""
@@ -289,21 +305,23 @@ with tab_kpi:
 with tab_perf:
     st.header("Visualisasi Performa Lanjutan")
     
-    st.subheader("🧬 Kinerja Genom Strategi")
-    if not filtered_df.empty:
-        strategy_perf = filtered_df.groupby('strategy_type')['pnl_percent'].sum().reset_index()
-        strategy_perf = strategy_perf.sort_values('pnl_percent', ascending=False)
-        
-        fig_strat = px.bar(
-            strategy_perf, 
-            x='pnl_percent', 
-            y='strategy_type',
-            orientation='h',
-            title="Total PnL per Strategi",
-            color='pnl_percent',
-            color_continuous_scale=['red', 'yellow', 'green']
+    # --- [FITUR BARU] Kurva Ekuitas Realized (The Truth) ---
+    st.subheader("📈 Kurva Pertumbuhan Profit (Realized)")
+    pnl_data = get_pnl_curve_data()
+    
+    if not pnl_data.empty:
+        fig_equity = px.area(
+            pnl_data, 
+            x='date', 
+            y='cumulative_profit',
+            title="Akumulasi Profit Bersih (Realized PnL)",
+            labels={'cumulative_profit': 'Total Profit (IDR)', 'date': 'Tanggal'},
+            color_discrete_sequence=['#00CC96'] # Warna Hijau Tosca
         )
-        st.plotly_chart(fig_strat, use_container_width=True)
+        fig_equity.update_layout(yaxis_tickformat=",.0f") # Format Rupiah
+        st.plotly_chart(fig_equity, use_container_width=True)
+    else:
+        st.info("Data kurva profit belum tersedia (butuh riwayat transaksi).")
     
     # [FITUR BARU] Analisis Performa Tersegmentasi
     st.subheader("🔬 Analisis Performa Tersegmentasi (Sankey Diagram)")
@@ -433,20 +451,55 @@ with tab_logs:
         st.error(f"Koneksi log error: {e}")
 
 with tab_data:
-    st.header("📜 Detail Transaksi")
-    if not filtered_df.empty:
-        # [FITUR BARU] Kode Warna P/L
-        def color_pnl(val):
-            if pd.isna(val): return ''
-            color = '#3D9970' if val > 0 else '#FF4136' if val < 0 else ''
-            return f'color: {color}'
-
-        st.dataframe(
-            filtered_df.style.applymap(color_pnl, subset=['pnl_percent']),
-            use_container_width=True
-        )
+    st.header("📜 Audit Keuangan & Transaksi")
+    
+    # Pilihan Tampilan
+    view_type = st.radio("Tampilan Data:", ["Ringkasan Posisi (Trades)", "Buku Besar Transaksi (Ledger)"], horizontal=True)
+    
+    if view_type == "Ringkasan Posisi (Trades)":
+        # Tampilan Lama (Tetap dipertahankan untuk overview)
+        if not filtered_df.empty:
+            def color_pnl(val):
+                if pd.isna(val): return ''
+                color = '#3D9970' if val > 0 else '#FF4136' if val < 0 else ''
+                return f'color: {color}'
+            st.dataframe(filtered_df.style.applymap(color_pnl, subset=['pnl_percent']), use_container_width=True)
+        else:
+            st.info("Tidak ada data posisi.")
+            
     else:
-        st.info("Tidak ada data transaksi yang cocok dengan filter.")
+        # Tampilan Baru (Ledger)
+        ledger_df = get_ledger_data()
+        
+        if not ledger_df.empty:
+            # Filter berdasarkan mode (Simulasi/Riil) jika kolom tersedia
+            # (Asumsi ledger juga punya flag is_simulation atau kita filter via join di backend)
+            # Untuk sekarang tampilkan semua
+            
+            st.markdown("### Riwayat Eksekusi (Beli & Jual)")
+            
+            # Buat pivot/agregasi sederhana
+            col1, col2, col3 = st.columns(3)
+            total_realized = ledger_df['pnl_realized'].sum()
+            total_volume = ledger_df['total_value'].sum()
+            
+            col1.metric("Total Realized Profit (Ledger)", f"Rp {total_realized:,.0f}")
+            col2.metric("Total Volume Transaksi", f"Rp {total_volume:,.0f}")
+            
+            # Pewarnaan khusus untuk Action Type
+            def color_action(val):
+                if 'BUY' in val: return 'color: #1f77b4' # Biru
+                if 'SELL' in val: return 'color: #d62728' # Merah
+                return ''
+            
+            st.dataframe(
+                ledger_df[['executed_at', 'pair', 'action_type', 'price', 'quantity', 'pnl_realized', 'notes']]
+                .style.applymap(color_action, subset=['action_type'])
+                .format({'price': "{:,.0f}", 'pnl_realized': "{:,.0f}"}),
+                use_container_width=True
+            )
+        else:
+            st.info("Belum ada data di Buku Besar.")
 
 with tab_signals:
     st.header("📡 Radar Sinyal Live")
