@@ -303,25 +303,24 @@ with tab_kpi:
         st.info("Metrik akan ditampilkan setelah ada data yang cocok dengan filter.")
 
 with tab_perf:
-    st.header("Visualisasi Performa Lanjutan")
-    
-    # --- [FITUR BARU] Kurva Ekuitas Realized (The Truth) ---
     st.subheader("📈 Kurva Pertumbuhan Profit (Realized)")
     pnl_data = get_pnl_curve_data()
     
-    if not pnl_data.empty:
+    # --- [PERBAIKAN] Cek apakah DataFrame kosong atau tidak punya kolom yang diharapkan ---
+    if not pnl_data.empty and 'date' in pnl_data.columns and 'cumulative_profit' in pnl_data.columns:
         fig_equity = px.area(
             pnl_data, 
             x='date', 
             y='cumulative_profit',
             title="Akumulasi Profit Bersih (Realized PnL)",
             labels={'cumulative_profit': 'Total Profit (IDR)', 'date': 'Tanggal'},
-            color_discrete_sequence=['#00CC96'] # Warna Hijau Tosca
+            color_discrete_sequence=['#00CC96']
         )
-        fig_equity.update_layout(yaxis_tickformat=",.0f") # Format Rupiah
+        fig_equity.update_layout(yaxis_tickformat=",.0f")
         st.plotly_chart(fig_equity, use_container_width=True)
     else:
-        st.info("Data kurva profit belum tersedia (butuh riwayat transaksi).")
+        # Tampilkan pesan ramah jika data belum ada
+        st.info("ℹ️ Belum ada data transaksi yang tercatat di Ledger baru. Lakukan trading untuk melihat grafik ini.")
     
     # [FITUR BARU] Analisis Performa Tersegmentasi
     st.subheader("🔬 Analisis Performa Tersegmentasi (Sankey Diagram)")
